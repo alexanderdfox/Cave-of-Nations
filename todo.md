@@ -1,0 +1,31 @@
+# Cave of Nations – Improvement Ideas
+
+- Integrate CFBundleIconName into the bundle so the rendered `AppIcon.icns` is automatically picked up during packaging.
+- Add click-to-move pathfinding (e.g., A* on the block grid) so Anubis can navigate around obstacles smoothly instead of single-step moves.
+- Introduce hover/selection VFX and audio cues for player feedback when selecting or issuing commands.
+- Expand UI with an in-game minimap or depth gauge to track explored regions and relic locations.
+- Implement resource tooltips and a detailed inventory panel showing block counts and their strategic uses.
+- Add save/load world generation seeds so players can revisit or share interesting layouts.
+- Wire music/effects volume sliders to actual audio playback once soundtrack/FX are in place.
+- Enhance digging with particle systems and animation blends to reduce repetition and add polish.
+- Add underground hazards such as cave-ins or flooding to make digging more strategic and risky.
+- Develop advanced AI behaviors for enemy units or wildlife, including patrols and territory defense.
+- Enable players to customize building placement orientation and preview before construction.
+- Implement multi-unit selection with drag-to-select and group commands for coordinated actions.
+- Add achievement tracking and in-game milestones tied to exploration, resource gathering, and clan expansion.
+- Introduce day/night cycles with changing ambient lighting and gameplay effects (e.g., nocturnal threats).
+- Expand clan management features, including assigning roles and prioritizing unit tasks in a UI panel.
+- Create lore entries and collectible artifacts to encourage exploration and world-building.
+- Add dynamic soundscapes that respond to player actions and environment changes.
+- Integrate Steam or platform achievements and cloud save capabilities for broader reach and persistence.
+- Allow the camera to freely orbit, zoom, and pan with smooth mouse/touch gestures.
+- Add preview outlines and space-validation before placing new tunnels or buildings.
+- Implement animated water/lava flows that interact with block placement and mining.
+- Add clan diplomacy or reputation, with other groups potentially appearing over time.
+- Create unlockable clan upgrades that boost mining, building, or resource efficiency.
+- Add modding support for custom blocks, maps, and scenarios via simple file drop-ins.
+- Introduce random events (storms, migrations, earthquakes) that alter player strategy.
+- Expand resource system with rare gems or unique strategic materials.
+- Add an in-game tutorial overlay to guide first-time players through basic actions.
+- Track excavation history and allow step-back "undo" for accidental moves or builds.
+
