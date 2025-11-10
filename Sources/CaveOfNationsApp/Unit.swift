@@ -1,3 +1,11 @@
+//
+//  Unit.swift
+//  CaveOfNationsApp
+//
+//  Defines the lightweight simulation model for individual clan members,
+//  their roles, command queue, and simple build/harvest behaviour.
+//
+
 import Foundation
 import SceneKit
 

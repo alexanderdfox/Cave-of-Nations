@@ -1,3 +1,13 @@
+//
+//  ContentView.swift
+//  CaveOfNationsApp
+//
+//  Root SwiftUI scene that embeds SceneKit gameplay and overlays the UI chrome.
+//  - Hosts the SceneView wrapper, resource panels, command buttons, and menus.
+//  - Forwards keyboard/mouse gestures through the coordinator to the view model.
+//  - Presents loading, options, pause, and minimap interfaces.
+//
+
 import SwiftUI
 import SceneKit
 import AppKit

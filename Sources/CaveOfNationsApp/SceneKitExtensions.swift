@@ -1,3 +1,10 @@
+//
+//  SceneKitExtensions.swift
+//  CaveOfNationsApp
+//
+//  Utility overloads and helpers for concise vector math inside GameWorld.
+//
+
 import SceneKit
 
 func +(lhs: SCNVector3, rhs: SCNVector3) -> SCNVector3 {

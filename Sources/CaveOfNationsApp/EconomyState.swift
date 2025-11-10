@@ -1,3 +1,10 @@
+//
+//  EconomyState.swift
+//  CaveOfNationsApp
+//
+//  Tracks resource stockpiles, population limits, and basic upkeep logic used by the game loop.
+//
+
 import Foundation
 import SceneKit
 

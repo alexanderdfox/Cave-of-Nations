@@ -1,3 +1,12 @@
+//
+//  Building.swift
+//  CaveOfNationsApp
+//
+//  Contains lightweight types that describe player structures:
+//  - `Template` holds authoring data for the command menu.
+//  - `Blueprint` captures placement coordinates and costs for queued builds.
+//
+
 import Foundation
 import SceneKit
 import simd

@@ -1,3 +1,13 @@
+//
+//  GameWorld.swift
+//  CaveOfNationsApp
+//
+//  High-level responsibilities:
+//  - Owns the procedural voxel terrain, block metadata, and SceneKit nodes.
+//  - Orchestrates character spawning, movement, digging, and pathfinding.
+//  - Manages the orbital camera rig plus building preview visuals.
+//
+
 import Foundation
 import SceneKit
 import GameplayKit

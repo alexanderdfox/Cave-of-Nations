@@ -1,3 +1,10 @@
+//
+//  BlockType.swift
+//  CaveOfNationsApp
+//
+//  Enumerates the available voxel materials and their SceneKit asset metadata.
+//
+
 import SceneKit
 import AppKit
 

@@ -1,3 +1,11 @@
+//
+//  GameSettings.swift
+//  CaveOfNationsApp
+//
+//  Observable settings model that stores world dimensions, audio, and display preferences.
+//  Also exposes a `resetPublisher` to notify the gameplay scene of rebuild requests.
+//
+
 import Foundation
 import CoreGraphics
 import Combine

@@ -1,3 +1,13 @@
+//
+//  GameViewModel.swift
+//  CaveOfNationsApp
+//
+//  This observable object bridges SwiftUI/SceneKit input with GameWorld state.
+//  - Maintains unit selection, economy snapshots, and placement mode.
+//  - Exposes commands for clicks, keyboard events, and camera gestures.
+//  - Ticks the simulation and queues unit actions.
+//
+
 import Foundation
 import SceneKit
 import Combine
