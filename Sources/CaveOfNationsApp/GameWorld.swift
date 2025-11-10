@@ -21,6 +21,20 @@ final class GameWorld {
     private let rotationAction: SCNAction? = nil
     private lazy var quicksandMaterial: SCNMaterial = Self.makeQuicksandMaterial()
 
+    /// Orbit-style camera rig anchored at `cameraTarget`. The node itself is reused by `SceneView`.
+    private let cameraNode = SCNNode()
+    /// Focus point that the orbital camera tracks while panning and zooming.
+    private var cameraTarget: SCNVector3 = SCNVector3Zero
+    /// `(pitch, yaw)` pair (in radians) that drives the orbital camera transform.
+    private var cameraAngles = SIMD2<Double>(0.9, Double.pi * 0.75)
+    /// Current distance from the target focus point.
+    private var cameraDistance: CGFloat = 0
+    private let minCameraDistance: CGFloat = 6
+    private let maxCameraDistance: CGFloat = 120
+
+    /// Lazily created translucent mesh that previews building placement validity.
+    private var placementPreviewNode: SCNNode?
+
     private var blockNodes: [[[SCNNode?]]]
     private var blockTypes: [[[BlockType]]]
     private var surfaceDepthCache: [[Int]]?
@@ -58,6 +72,54 @@ final class GameWorld {
         playerGridPosition
     }
 
+    /// Summary of a placement probe against the voxel grid.
+    struct PlacementEvaluation {
+        let coordinate: SIMD2<Int>
+        let worldPosition: SCNVector3
+        let footprint: SIMD2<Int>
+        let valid: Bool
+    }
+
+    /// Adjust the orbit camera angles with a screen-space drag delta.
+    func orbitCamera(by delta: CGPoint) {
+        let sensitivity = 0.0032
+        cameraAngles.y -= Double(delta.x) * sensitivity
+        cameraAngles.x += Double(delta.y) * sensitivity
+        let minPitch = 0.2
+        let maxPitch = 1.2
+        cameraAngles.x = max(minPitch, min(maxPitch, cameraAngles.x))
+        updateCameraTransform(animated: true)
+    }
+
+    /// Translate the focus point parallel to the ground plane.
+    func panCamera(by delta: CGPoint) {
+        guard cameraDistance > 0 else { return }
+        let scale = Float(cameraDistance) * 0.0008
+        let right = cameraNode.simdWorldRight
+        let forward = -cameraNode.simdWorldFront
+        var translation = (-Float(delta.x) * scale) * right + (Float(delta.y) * scale) * forward
+        translation.y = 0
+        cameraTarget.x += CGFloat(translation.x)
+        cameraTarget.z += CGFloat(translation.z)
+        clampCameraTarget()
+        updateCameraTransform(animated: false)
+    }
+
+    /// Dolly the camera toward or away from the focus point.
+    func zoomCamera(by delta: CGFloat) {
+        guard cameraDistance > 0 else { return }
+        let zoomFactor = 1 - (delta * 0.02)
+        cameraDistance = max(minCameraDistance, min(maxCameraDistance, cameraDistance * max(0.25, min(1.75, zoomFactor))))
+        updateCameraTransform(animated: false)
+    }
+
+    /// Snap the focus point to an arbitrary world-space location.
+    func focusCamera(on point: SCNVector3, animated: Bool = true) {
+        cameraTarget = point
+        clampCameraTarget()
+        updateCameraTransform(animated: animated)
+    }
+
     init(dimensions: Dimensions) {
         self.dimensions = dimensions
         self.scene = SCNScene()
@@ -80,6 +142,8 @@ final class GameWorld {
         generateBlocks()
         layoutBlocks()
         spawnPlayerCharacter()
+        updatePlacementPreview(for: nil)
+        resetCamera(animated: true)
     }
 
     func blockCounts() -> [BlockType: Int] {
@@ -149,18 +213,13 @@ final class GameWorld {
         scene.rootNode.addChildNode(directionalNode)
 
         let camera = SCNCamera()
-        camera.zFar = 200
+        camera.zFar = 400
         camera.zNear = 0.1
-        camera.fieldOfView = 70
-        let cameraNode = SCNNode()
+        camera.fieldOfView = 68
         cameraNode.camera = camera
-        cameraNode.position = SCNVector3(
-            CGFloat(dimensions.width) * tileSize * 0.9,
-            CGFloat(dimensions.height) * tileSize * 1.8,
-            CGFloat(dimensions.depth) * tileSize * 2.6
-        )
-        cameraNode.look(at: focusPoint)
+        cameraNode.name = "primary.camera"
         scene.rootNode.addChildNode(cameraNode)
+        resetCamera(animated: false)
 
         let floor = SCNFloor()
         floor.reflectivity = 0
@@ -170,6 +229,54 @@ final class GameWorld {
         scene.rootNode.addChildNode(floorNode)
 
         layoutQuicksandPlane()
+    }
+
+    /// Initialize the camera rig each time the world is rebuilt.
+    private func resetCamera(animated: Bool) {
+        cameraTarget = focusPoint
+        let baseline = max(CGFloat(dimensions.width), CGFloat(dimensions.depth)) * tileSize * 1.75
+        cameraDistance = baseline.clamped(to: minCameraDistance...maxCameraDistance)
+        cameraAngles = SIMD2<Double>(0.82, Double.pi * 0.72)
+        updateCameraTransform(animated: animated, duration: animated ? 0.35 : 0)
+    }
+
+    /// Prevent panning from straying too far outside the playable area.
+    private func clampCameraTarget() {
+        let minX: CGFloat = -tileSize * 4
+        let maxX: CGFloat = CGFloat(dimensions.width - 1) * tileSize + tileSize * 4
+        let minZ: CGFloat = -tileSize * 4
+        let maxZ: CGFloat = CGFloat(dimensions.depth - 1) * tileSize + tileSize * 4
+        cameraTarget.x = cameraTarget.x.clamped(to: minX...maxX)
+        cameraTarget.z = cameraTarget.z.clamped(to: minZ...maxZ)
+        let minY: CGFloat = tileSize * 0.5
+        let maxY: CGFloat = CGFloat(dimensions.height) * tileSize
+        cameraTarget.y = cameraTarget.y.clamped(to: minY...maxY)
+    }
+
+    /// Convert the polar camera state into an SCNNode transform.
+    private func updateCameraTransform(animated: Bool, duration: TimeInterval = 0.18) {
+        guard cameraDistance > 0 else { return }
+        let pitch = cameraAngles.x
+        let yaw = cameraAngles.y
+        let cosPitch = cos(pitch)
+        let sinPitch = sin(pitch)
+        let sinYaw = sin(yaw)
+        let cosYaw = cos(yaw)
+        let offsetX = cameraDistance * CGFloat(sinYaw * cosPitch)
+        let offsetY = cameraDistance * CGFloat(sinPitch)
+        let offsetZ = cameraDistance * CGFloat(cosYaw * cosPitch)
+        let target = cameraTarget
+        let position = SCNVector3(
+            target.x + offsetX,
+            target.y + offsetY,
+            target.z + offsetZ
+        )
+
+        SCNTransaction.begin()
+        SCNTransaction.animationDuration = animated ? duration : 0
+        cameraNode.position = position
+        cameraNode.look(at: target, up: SCNVector3(0, 1, 0), localFront: SCNVector3(0, 0, -1))
+        SCNTransaction.commit()
     }
 
     private func layoutQuicksandPlane() {
@@ -248,6 +355,7 @@ final class GameWorld {
         return blockTemplate(for: type).clone()
     }
 
+    /// Uniformly scales USDZ assets so their largest axis matches a single tile.
     private func normalize(node: SCNNode, targetHeight: CGFloat? = nil) {
         let (minVec, maxVec) = node.boundingBox
         let sizeX = CGFloat(maxVec.x - minVec.x)
@@ -468,7 +576,7 @@ final class GameWorld {
         return CGFloat(atan2(Double(delta.x), Double(-delta.y)))
     }
 
-    private func gridCoordinate(for worldPoint: SCNVector3) -> SIMD2<Int>? {
+    func gridCoordinate(for worldPoint: SCNVector3) -> SIMD2<Int>? {
         guard tileSize != 0 else { return nil }
         let x = Int(round(Double(CGFloat(worldPoint.x) / tileSize)))
         let z = Int(round(Double(CGFloat(worldPoint.z) / tileSize)))
@@ -565,6 +673,7 @@ final class GameWorld {
         playerNode.runAction(SCNAction.sequence(actions), forKey: "guardian.path")
     }
 
+    /// Request an A* path toward a hit-test coordinate and animate the guardian along it.
     func movePlayer(to worldPoint: SCNVector3) {
         guard let playerNode, let current = playerGridPosition else { return }
         guard let targetCoordinate = gridCoordinate(for: worldPoint) else { return }
@@ -572,6 +681,114 @@ final class GameWorld {
         guard let path = findPath(from: current, to: targetCoordinate) else { return }
         playerNode.removeAction(forKey: "guardian.path")
         followPath(path)
+    }
+
+    /// Validate a rectangular building footprint and return the associated world transform.
+    func evaluatePlacement(at coordinate: SIMD2<Int>, footprint: SIMD2<Int>) -> PlacementEvaluation {
+        let footprintX = max(1, footprint.x)
+        let footprintZ = max(1, footprint.y)
+        var surfaces: [Int] = []
+        var valid = true
+
+        for dx in 0..<footprintX {
+            for dz in 0..<footprintZ {
+                let x = coordinate.x + dx
+                let z = coordinate.y + dz
+                guard x >= 0, x < dimensions.width, z >= 0, z < dimensions.depth else {
+                    valid = false
+                    continue
+                }
+                guard let surface = surfaceLevel(atX: x, z: z) else {
+                    valid = false
+                    continue
+                }
+                let headIndex = surface + 1
+                if headIndex >= dimensions.height {
+                    valid = false
+                } else if headIndex >= 0 && blockTypes[x][headIndex][z] != .air {
+                    valid = false
+                }
+                surfaces.append(surface)
+            }
+        }
+
+        if valid, let reference = surfaces.first {
+            valid = surfaces.allSatisfy { abs($0 - reference) <= 1 }
+        } else if surfaces.isEmpty {
+            valid = false
+        }
+
+        let maxSurface = surfaces.max() ?? 0
+        let halfTile = tileSize / 2
+        let groundTop = CGFloat(maxSurface) * tileSize + halfTile
+        let buildingHeight = tileSize * 0.9
+        let centerX = CGFloat(coordinate.x) + CGFloat(footprintX - 1) / 2
+        let centerZ = CGFloat(coordinate.y) + CGFloat(footprintZ - 1) / 2
+        let position = SCNVector3(
+            centerX * tileSize,
+            groundTop + buildingHeight / 2,
+            centerZ * tileSize
+        )
+
+        return PlacementEvaluation(
+            coordinate: coordinate,
+            worldPosition: position,
+            footprint: SIMD2<Int>(footprintX, footprintZ),
+            valid: valid
+        )
+    }
+
+    /// Create or update the translucent placement preview mesh.
+    func updatePlacementPreview(for evaluation: PlacementEvaluation?) {
+        guard let evaluation else {
+            placementPreviewNode?.removeFromParentNode()
+            placementPreviewNode = nil
+            return
+        }
+
+        let width = CGFloat(evaluation.footprint.x) * tileSize
+        let length = CGFloat(evaluation.footprint.y) * tileSize
+        let height = tileSize * 0.9
+
+        let node: SCNNode
+        if let existing = placementPreviewNode, let box = existing.geometry as? SCNBox {
+            if abs(box.width - width) > 0.01 || abs(box.length - length) > 0.01 {
+                box.width = width
+                box.length = length
+            }
+            node = existing
+        } else {
+            let box = SCNBox(width: width, height: height, length: length, chamferRadius: tileSize * 0.08)
+            let material = SCNMaterial()
+            material.diffuse.contents = NSColor.systemGreen.withAlphaComponent(0.35)
+            material.emission.contents = NSColor.systemGreen
+            material.lightingModel = .constant
+            material.isDoubleSided = true
+            material.blendMode = .alpha
+            box.materials = [material]
+            let newNode = SCNNode(geometry: box)
+            newNode.opacity = 0.85
+            newNode.name = "placement.preview"
+            newNode.castsShadow = false
+            terrainNode.addChildNode(newNode)
+            placementPreviewNode = newNode
+            node = newNode
+        }
+
+        if let material = node.geometry?.firstMaterial {
+            if evaluation.valid {
+                material.diffuse.contents = NSColor.systemGreen.withAlphaComponent(0.35)
+                material.emission.contents = NSColor.systemGreen.withAlphaComponent(0.65)
+            } else {
+                material.diffuse.contents = NSColor.systemRed.withAlphaComponent(0.35)
+                material.emission.contents = NSColor.systemRed.withAlphaComponent(0.65)
+            }
+        }
+
+        SCNTransaction.begin()
+        SCNTransaction.animationDuration = 0.15
+        node.position = evaluation.worldPosition
+        SCNTransaction.commit()
     }
 
     func isPlayerSelected(_ node: SCNNode) -> Bool {
@@ -775,5 +992,11 @@ final class GameWorld {
 private extension Bool {
     static func random(probability: Double) -> Bool {
         Double.random(in: 0...1) < probability
+    }
+}
+
+private extension Comparable {
+    func clamped(to range: ClosedRange<Self>) -> Self {
+        max(range.lowerBound, min(range.upperBound, self))
     }
 }

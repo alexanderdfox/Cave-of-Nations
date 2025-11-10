@@ -27,6 +27,8 @@ struct ContentView: View {
     @State private var loadingDuration: TimeInterval = 0
     @State private var loadingStart: Date?
     @State private var loadingTimer: Timer?
+    /// Screen-space rectangle rendered while drag-selecting units.
+    @State private var selectionRect: CGRect?
 
     init(settings: GameSettings) {
         self._settings = ObservedObject(initialValue: settings)
@@ -84,9 +86,10 @@ struct ContentView: View {
 
     private func gameplayScene(size: CGSize) -> some View {
         ZStack {
-            SceneViewWrapper(scene: viewModel.scene, onKeyDown: handleKeyDown)
+            SceneViewWrapper(selectionRect: $selectionRect, viewModel: viewModel, onKeyDown: handleKeyDown)
                 .frame(width: size.width, height: size.height)
                 .ignoresSafeArea()
+                .overlay(selectionOverlay)
                 .onReceive(settings.resetPublisher) { _ in
                     viewModel.rebuild(using: settings)
                     viewModel.prepareForPlay()
@@ -109,6 +112,29 @@ struct ContentView: View {
                     .zIndex(1)
             }
         }
+    }
+
+    /// Renders the translucent marquee shown during drag selection.
+    private var selectionOverlay: some View {
+        GeometryReader { proxy in
+            if let rect = selectionRect {
+                let adjusted = CGRect(
+                    x: rect.origin.x,
+                    y: proxy.size.height - rect.origin.y - rect.height,
+                    width: rect.width,
+                    height: rect.height
+                )
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(GameplayTheme.accentGold.opacity(0.9), lineWidth: 1.2)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(Color.white.opacity(0.08))
+                    )
+                    .frame(width: adjusted.width, height: adjusted.height)
+                    .position(x: adjusted.midX, y: adjusted.midY)
+            }
+        }
+        .allowsHitTesting(false)
     }
 
     private var topOverlay: some View {
@@ -180,13 +206,46 @@ struct ContentView: View {
                     let focus = viewModel.focusPointForCamera()
                     viewModel.issue(command: .move(to: focus))
                 })
+                // Build command menu toggles placement mode and exposes cancel action.
+                Menu {
+                    ForEach(viewModel.availableBuildings) { template in
+                        Button {
+                            viewModel.togglePlacement(for: template)
+                        } label: {
+                            Label(template.name, systemImage: "hammer.fill")
+                        }
+                    }
+                    if viewModel.isPlacingBuilding {
+                        Divider()
+                        Button("Cancel Placement", action: viewModel.cancelPlacement)
+                    }
+                } label: {
+                    Label(viewModel.isPlacingBuilding ? "Placing..." : "Place Building", systemImage: "hammer")
+                        .labelStyle(.titleAndIcon)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+
+                if viewModel.isPlacingBuilding {
+                    Button("Cancel", action: viewModel.cancelPlacement)
+                        .buttonStyle(SecondaryButtonStyle())
+                }
                 Button(viewModel.isPaused ? "Resume" : "Pause") {
                     viewModel.togglePause()
                 }
                 .buttonStyle(SecondaryButtonStyle())
             }
+            if let placement = viewModel.placementState {
+                HStack {
+                    Label("Placing \(placement.template.name)", systemImage: placement.isValid ? "checkmark.seal.fill" : "xmark.seal.fill")
+                        .foregroundStyle(placement.isValid ? Color.green : Color.red)
+                    Text(placement.isValid ? "Left-click to confirm." : "Move cursor to a valid tile.")
+                        .foregroundStyle(Color.white.opacity(0.75))
+                }
+                .font(.footnote.weight(.semibold))
+            }
 
-            Text("Controls: Point & click to interact, WASD / Arrow Keys to move Anubis, Space to dig, drag to orbit, scroll to zoom.")
+            Text("Controls: Click to path Anubis, drag-select to choose units, WASD/Arrows move, Space digs, Right-drag orbit, Option-drag or middle-drag pan, scroll or pinch to zoom.")
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(Color.white.opacity(0.75))
 
@@ -599,13 +658,27 @@ private struct SettingsDraft {
 
 private struct SceneViewWrapper: NSViewRepresentable {
     final class GameSceneView: SCNView {
+        weak var coordinator: Coordinator?
         var keyDownHandler: ((NSEvent) -> Void)?
+        private var trackingArea: NSTrackingArea?
 
         override var acceptsFirstResponder: Bool { true }
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             window?.makeFirstResponder(self)
+            window?.acceptsMouseMovedEvents = true
+        }
+
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            if let trackingArea {
+                removeTrackingArea(trackingArea)
+            }
+            let options: NSTrackingArea.Options = [.activeAlways, .mouseMoved, .inVisibleRect, .mouseEnteredAndExited]
+            let area = NSTrackingArea(rect: bounds, options: options, owner: self, userInfo: nil)
+            addTrackingArea(area)
+            trackingArea = area
         }
 
         override func keyDown(with event: NSEvent) {
@@ -615,19 +688,82 @@ private struct SceneViewWrapper: NSViewRepresentable {
                 super.keyDown(with: event)
             }
         }
+
+        override func mouseDown(with event: NSEvent) {
+            coordinator?.handleMouseDown(event, in: self)
+        }
+
+        override func mouseDragged(with event: NSEvent) {
+            coordinator?.handleMouseDragged(event, in: self)
+        }
+
+        override func mouseUp(with event: NSEvent) {
+            coordinator?.handleMouseUp(event, in: self)
+        }
+
+        override func rightMouseDown(with event: NSEvent) {
+            coordinator?.handleRightMouseDown(event, in: self)
+        }
+
+        override func rightMouseDragged(with event: NSEvent) {
+            coordinator?.handleRightMouseDragged(event, in: self)
+        }
+
+        override func rightMouseUp(with event: NSEvent) {
+            coordinator?.handleRightMouseUp(event, in: self)
+        }
+
+        override func otherMouseDown(with event: NSEvent) {
+            coordinator?.handleOtherMouseDown(event, in: self)
+        }
+
+        override func otherMouseDragged(with event: NSEvent) {
+            coordinator?.handleOtherMouseDragged(event, in: self)
+        }
+
+        override func otherMouseUp(with event: NSEvent) {
+            coordinator?.handleOtherMouseUp(event, in: self)
+        }
+
+        override func scrollWheel(with event: NSEvent) {
+            coordinator?.handleScrollWheel(event, in: self)
+        }
+
+        override func magnify(with event: NSEvent) {
+            coordinator?.handleMagnify(event, in: self)
+        }
+
+        override func mouseMoved(with event: NSEvent) {
+            coordinator?.handleMouseMoved(event, in: self)
+        }
+
+        override func mouseExited(with event: NSEvent) {
+            coordinator?.handleMouseExited(event, in: self)
+        }
     }
 
-    let scene: SCNScene
+    @Binding var selectionRect: CGRect?
+    var viewModel: GameViewModel
     var onKeyDown: ((NSEvent) -> Void)?
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(viewModel: viewModel, selectionRect: _selectionRect)
+    }
 
     func makeNSView(context: Context) -> GameSceneView {
         let view = GameSceneView()
-        view.scene = scene
+        view.scene = viewModel.scene
         view.backgroundColor = .black
-        view.allowsCameraControl = true
-        view.pointOfView = scene.rootNode.childNodes.first { $0.camera != nil }
+        view.allowsCameraControl = false
+        view.isPlaying = true
+        view.rendersContinuously = true
         view.loops = true
+        view.antialiasingMode = .multisampling4X
+        view.isJitteringEnabled = true
+        view.coordinator = context.coordinator
         view.keyDownHandler = onKeyDown
+        view.pointOfView = cameraNode(from: viewModel.scene)
+        context.coordinator.sceneView = view
         DispatchQueue.main.async {
             view.window?.makeFirstResponder(view)
         }
@@ -635,10 +771,258 @@ private struct SceneViewWrapper: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: GameSceneView, context: Context) {
-        if nsView.scene !== scene {
-            nsView.scene = scene
+        if nsView.scene !== viewModel.scene {
+            nsView.scene = viewModel.scene
         }
         nsView.keyDownHandler = onKeyDown
+        nsView.coordinator = context.coordinator
+        if nsView.pointOfView == nil || nsView.pointOfView?.name != "primary.camera" {
+            nsView.pointOfView = cameraNode(from: viewModel.scene)
+        }
+        context.coordinator.sceneView = nsView
+    }
+
+    private func cameraNode(from scene: SCNScene) -> SCNNode? {
+        scene.rootNode.childNode(withName: "primary.camera", recursively: true)
+    }
+
+    @MainActor
+    /// Routes macOS input events to gameplay actions and overlays.
+    final class Coordinator: NSObject {
+        let viewModel: GameViewModel
+        var selectionRect: Binding<CGRect?>
+        weak var sceneView: GameSceneView?
+
+        private var dragStartPoint: CGPoint = .zero
+        private var lastDragPoint: CGPoint = .zero
+        private var orbitAnchor: CGPoint = .zero
+        private var panAnchor: CGPoint = .zero
+        private var isDraggingSelection = false
+        private var isOrbitingCamera = false
+        private var isPanningCamera = false
+
+        init(viewModel: GameViewModel, selectionRect: Binding<CGRect?>) {
+            self.viewModel = viewModel
+            self.selectionRect = selectionRect
+        }
+
+        func handleMouseDown(_ event: NSEvent, in view: GameSceneView) {
+            sceneView = view
+            let location = view.convert(event.locationInWindow, from: nil)
+            dragStartPoint = location
+            lastDragPoint = location
+            isDraggingSelection = false
+            isPanningCamera = false
+            selectionRect.wrappedValue = nil
+            if viewModel.isPlacingBuilding {
+                updatePlacementHover(at: location, in: view)
+            }
+        }
+
+        func handleMouseDragged(_ event: NSEvent, in view: GameSceneView) {
+            let location = view.convert(event.locationInWindow, from: nil)
+            let delta = CGPoint(x: location.x - lastDragPoint.x, y: location.y - lastDragPoint.y)
+            lastDragPoint = location
+
+            if viewModel.isPlacingBuilding {
+                updatePlacementHover(at: location, in: view)
+                return
+            }
+
+            if event.modifierFlags.contains(.option) {
+                if !isPanningCamera {
+                    isPanningCamera = true
+                    panAnchor = location
+                }
+                viewModel.panCamera(by: delta)
+                selectionRect.wrappedValue = nil
+                return
+            }
+
+            let distance = hypot(location.x - dragStartPoint.x, location.y - dragStartPoint.y)
+            if !isDraggingSelection && distance > 6 {
+                isDraggingSelection = true
+            }
+            if isDraggingSelection {
+                updateSelectionRect(to: location)
+            }
+        }
+
+        func handleMouseUp(_ event: NSEvent, in view: GameSceneView) {
+            let location = view.convert(event.locationInWindow, from: nil)
+
+            if viewModel.isPlacingBuilding {
+                updatePlacementHover(at: location, in: view)
+                if viewModel.placementState?.isValid == true {
+                    viewModel.commitPlacement()
+                } else {
+                    NSSound.beep()
+                }
+                selectionRect.wrappedValue = nil
+                return
+            }
+
+            if isDraggingSelection, let rect = selectionRect.wrappedValue {
+                finalizeSelection(with: rect, event: event, in: view)
+            } else {
+                handleClick(event: event, at: location, in: view)
+            }
+
+            selectionRect.wrappedValue = nil
+            isDraggingSelection = false
+            isPanningCamera = false
+        }
+
+        func handleRightMouseDown(_ event: NSEvent, in view: GameSceneView) {
+            sceneView = view
+            orbitAnchor = view.convert(event.locationInWindow, from: nil)
+            isOrbitingCamera = true
+        }
+
+        func handleRightMouseDragged(_ event: NSEvent, in view: GameSceneView) {
+            guard isOrbitingCamera else { return }
+            let location = view.convert(event.locationInWindow, from: nil)
+            let delta = CGPoint(x: location.x - orbitAnchor.x, y: location.y - orbitAnchor.y)
+            orbitAnchor = location
+            viewModel.orbitCamera(by: delta)
+        }
+
+        func handleRightMouseUp(_ event: NSEvent, in view: GameSceneView) {
+            isOrbitingCamera = false
+        }
+
+        func handleOtherMouseDown(_ event: NSEvent, in view: GameSceneView) {
+            guard event.buttonNumber == 2 else { return }
+            sceneView = view
+            panAnchor = view.convert(event.locationInWindow, from: nil)
+            isPanningCamera = true
+        }
+
+        func handleOtherMouseDragged(_ event: NSEvent, in view: GameSceneView) {
+            guard isPanningCamera, event.buttonNumber == 2 else { return }
+            let location = view.convert(event.locationInWindow, from: nil)
+            let delta = CGPoint(x: location.x - panAnchor.x, y: location.y - panAnchor.y)
+            panAnchor = location
+            viewModel.panCamera(by: delta)
+        }
+
+        func handleOtherMouseUp(_ event: NSEvent, in view: GameSceneView) {
+            if event.buttonNumber == 2 {
+                isPanningCamera = false
+            }
+        }
+
+        func handleScrollWheel(_ event: NSEvent, in view: GameSceneView) {
+            let scale: CGFloat = event.hasPreciseScrollingDeltas ? 0.08 : 0.3
+            let delta = CGFloat(event.scrollingDeltaY) * scale
+            viewModel.zoomCamera(by: delta)
+        }
+
+        func handleMagnify(_ event: NSEvent, in view: GameSceneView) {
+            let delta = CGFloat(event.magnification) * 3.5
+            viewModel.zoomCamera(by: delta)
+        }
+
+        func handleMouseMoved(_ event: NSEvent, in view: GameSceneView) {
+            guard viewModel.isPlacingBuilding else { return }
+            let location = view.convert(event.locationInWindow, from: nil)
+            updatePlacementHover(at: location, in: view)
+        }
+
+        func handleMouseExited(_ event: NSEvent, in view: GameSceneView) {
+            guard viewModel.isPlacingBuilding else { return }
+            viewModel.updatePlacementHover(with: nil)
+        }
+
+        private func updateSelectionRect(to point: CGPoint) {
+            let rect = CGRect(
+                x: min(dragStartPoint.x, point.x),
+                y: min(dragStartPoint.y, point.y),
+                width: abs(point.x - dragStartPoint.x),
+                height: abs(point.y - dragStartPoint.y)
+            )
+            selectionRect.wrappedValue = rect
+        }
+
+        private func finalizeSelection(with rect: CGRect, event: NSEvent, in view: GameSceneView) {
+            let ids = units(in: rect, view: view)
+            let additive = event.modifierFlags.contains(.shift) || event.modifierFlags.contains(.command)
+            viewModel.selectUnits(in: ids, additive: additive)
+        }
+
+        private func handleClick(event: NSEvent, at location: CGPoint, in view: GameSceneView) {
+            let additive = event.modifierFlags.contains(.shift) || event.modifierFlags.contains(.command)
+            if let unit = nearestUnit(to: location, in: view) {
+                viewModel.select(unit: unit, additive: additive)
+                return
+            }
+
+            guard !additive, let worldPoint = worldPoint(at: location, in: view) else { return }
+            viewModel.movePlayer(to: worldPoint)
+        }
+
+        private func units(in rect: CGRect, view: GameSceneView) -> Set<UUID> {
+            guard !viewModel.units.isEmpty else { return [] }
+            var identifiers: Set<UUID> = []
+            for unit in viewModel.units {
+                let projected = view.projectPoint(unit.position)
+                guard projected.z >= 0 else { continue }
+                let point = CGPoint(x: CGFloat(projected.x), y: CGFloat(projected.y))
+                if rect.contains(point) {
+                    identifiers.insert(unit.id)
+                }
+            }
+            return identifiers
+        }
+
+        private func nearestUnit(to location: CGPoint, in view: GameSceneView) -> Unit? {
+            var best: (Unit, CGFloat)?
+            for unit in viewModel.units {
+                let projected = view.projectPoint(unit.position)
+                guard projected.z >= 0 else { continue }
+                let point = CGPoint(x: CGFloat(projected.x), y: CGFloat(projected.y))
+                let distance = hypot(point.x - location.x, point.y - location.y)
+                if distance <= 24 {
+                    if let bestCurrent = best {
+                        if distance < bestCurrent.1 {
+                            best = (unit, distance)
+                        }
+                    } else {
+                        best = (unit, distance)
+                    }
+                }
+            }
+            return best?.0
+        }
+
+        private func updatePlacementHover(at location: CGPoint, in view: GameSceneView) {
+            guard let point = worldPoint(at: location, in: view) else {
+                viewModel.updatePlacementHover(with: nil)
+                return
+            }
+            viewModel.updatePlacementHover(with: point)
+        }
+
+        /// Map a 2D screen coordinate to a world point by first hit-testing and then falling back to an unprojected ray.
+        private func worldPoint(at location: CGPoint, in view: GameSceneView) -> SCNVector3? {
+            let options: [SCNHitTestOption: Any] = [
+                .searchMode: SCNHitTestSearchMode.closest.rawValue,
+                .ignoreHiddenNodes: false,
+                .backFaceCulling: false
+            ]
+            if let hit = view.hitTest(location, options: options).first {
+                return hit.worldCoordinates
+            }
+
+            let focus = viewModel.focusPointForCamera()
+            let near = view.unprojectPoint(SCNVector3(Float(location.x), Float(location.y), 0))
+            let far = view.unprojectPoint(SCNVector3(Float(location.x), Float(location.y), 1))
+            let direction = far - near
+            guard direction.y != 0 else { return nil }
+            let t = (focus.y - near.y) / direction.y
+            guard t >= 0 else { return nil }
+            return near + direction * CGFloat(t)
+        }
     }
 }
 
