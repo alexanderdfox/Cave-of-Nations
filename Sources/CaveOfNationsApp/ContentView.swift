@@ -154,13 +154,15 @@ struct ContentView: View {
                     .font(.system(size: 40, weight: .heavy, design: .default))
                     .foregroundStyle(GameplayTheme.accentGold)
                     .shadow(color: GameplayTheme.accentGold.opacity(0.45), radius: 14, x: 0, y: 10)
-                Text("Guide the fox clans through the shifting sands—mine, build, and unite the underground nations.")
+                Text("Age of Empires strategy meets Minecraft mining—command villagers, place voxels, found burrows.")
                     .font(.body.weight(.medium))
                     .foregroundStyle(Color.white.opacity(0.82))
                     .minimumScaleFactor(0.8)
                 HStack(spacing: 18) {
+                    statBadge(icon: "person.3.fill", title: "Population", value: viewModel.populationLabel)
                     statBadge(icon: "compass.drawing", title: "Depth", value: depthLabel)
                     statBadge(icon: "sparkles", title: "Relics", value: "\(viewModel.inventory[.relic] ?? 0)")
+                    statBadge(icon: "number", title: "Seed", value: "\(viewModel.worldSeed)")
                 }
             }
 
@@ -196,6 +198,7 @@ struct ContentView: View {
                 }
 
                 MinimapView(snapshot: viewModel.minimapSnapshot)
+                    .help("Top-down depth map. Gold dots mark relics; white dot is Anubis.")
             }
         }
         .padding(24)
@@ -204,10 +207,25 @@ struct ContentView: View {
 
     private var bottomOverlay: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text("Commands")
-                .font(.headline)
-                .foregroundStyle(GameplayTheme.accentGold)
+            HStack {
+                Text("Commands")
+                    .font(.headline)
+                    .foregroundStyle(GameplayTheme.accentGold)
+                Spacer()
+                Picker("Mode", selection: $viewModel.interactionMode) {
+                    ForEach(GameViewModel.InteractionMode.allCases) { mode in
+                        Text(mode.label).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 280)
+            }
+
+            hotbarRow
+
             HStack(spacing: 16) {
+                commandButton(label: "Train Villager", action: viewModel.trainVillager)
+                commandButton(label: "Craft Tunnel×4", action: viewModel.craftTunnelBlocks)
                 commandButton(label: "Harvest Soil", action: { viewModel.issue(command: .harvest(.soil)) })
                 commandButton(label: "Harvest Stone", action: { viewModel.issue(command: .harvest(.rock)) })
                 commandButton(label: "Collect Pipestone", action: { viewModel.issue(command: .harvest(.pipestone)) })
@@ -255,7 +273,7 @@ struct ContentView: View {
                 .font(.footnote.weight(.semibold))
             }
 
-            Text("Controls: Click to path Anubis, drag-select to choose units, WASD/Arrows move, Space digs, Right-drag orbit, Option-drag or middle-drag pan, scroll or pinch to zoom.")
+            Text(interactionHint)
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(Color.white.opacity(0.75))
 
@@ -283,27 +301,27 @@ struct ContentView: View {
     private var resourcesGrid: some View {
         Grid(horizontalSpacing: 16, verticalSpacing: 12) {
             GridRow {
-                resourceChip(icon: "leaf.fill", title: "Soil", value: viewModel.economy.amount(of: .soil))
-                resourceChip(icon: "cube.fill", title: "Stone", value: viewModel.economy.amount(of: .stone))
+                resourceChip(icon: "leaf.fill", title: "Soil", value: viewModel.economy.amount(of: .soil), help: ResourceHelp.soil)
+                resourceChip(icon: "cube.fill", title: "Stone", value: viewModel.economy.amount(of: .stone), help: ResourceHelp.stone)
             }
             GridRow {
-                resourceChip(icon: "square.fill", title: "Pipestone", value: viewModel.economy.amount(of: .pipestone))
-                resourceChip(icon: "sparkles", title: "Relics", value: viewModel.economy.amount(of: .relic))
+                resourceChip(icon: "square.fill", title: "Pipestone", value: viewModel.economy.amount(of: .pipestone), help: ResourceHelp.pipestone)
+                resourceChip(icon: "sparkles", title: "Relics", value: viewModel.economy.amount(of: .relic), help: ResourceHelp.relic)
             }
             GridRow {
-                resourceChip(icon: "leaf.circle.fill", title: "Food", value: viewModel.economy.amount(of: .food))
-                resourceChip(icon: "bolt.fill", title: "Energy", value: viewModel.economy.amount(of: .energy))
+                resourceChip(icon: "leaf.circle.fill", title: "Food", value: viewModel.economy.amount(of: .food), help: ResourceHelp.food)
+                resourceChip(icon: "bolt.fill", title: "Energy", value: viewModel.economy.amount(of: .energy), help: ResourceHelp.energy)
             }
         }
     }
 
     private var inventoryList: some View {
         VStack(alignment: .trailing, spacing: 10) {
-            inventoryRow(title: "Soil Blocks", value: viewModel.inventory[.soil] ?? 0)
-            inventoryRow(title: "Rock Blocks", value: viewModel.inventory[.rock] ?? 0)
-            inventoryRow(title: "Pipestone Blocks", value: viewModel.inventory[.pipestone] ?? 0)
-            inventoryRow(title: "Relic Finds", value: viewModel.inventory[.relic] ?? 0)
-            inventoryRow(title: "Den Remnants", value: viewModel.inventory[.den] ?? 0)
+            inventoryRow(title: "Soil Blocks", value: viewModel.inventory[.soil] ?? 0, help: ResourceHelp.soilBlock)
+            inventoryRow(title: "Rock Blocks", value: viewModel.inventory[.rock] ?? 0, help: ResourceHelp.rockBlock)
+            inventoryRow(title: "Pipestone Blocks", value: viewModel.inventory[.pipestone] ?? 0, help: ResourceHelp.pipestoneBlock)
+            inventoryRow(title: "Relic Finds", value: viewModel.inventory[.relic] ?? 0, help: ResourceHelp.relicBlock)
+            inventoryRow(title: "Den Remnants", value: viewModel.inventory[.den] ?? 0, help: ResourceHelp.denBlock)
         }
         .font(.callout)
         .foregroundStyle(Color.white.opacity(0.85))
@@ -336,7 +354,7 @@ struct ContentView: View {
         )
     }
 
-    private func resourceChip(icon: String, title: String, value: Int) -> some View {
+    private func resourceChip(icon: String, title: String, value: Int, help: String) -> some View {
         HStack(spacing: 10) {
             Image(systemName: icon)
                 .font(.title3.weight(.semibold))
@@ -357,21 +375,66 @@ struct ContentView: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(Color.white.opacity(0.08))
         )
+        .help(help)
     }
 
-    private func inventoryRow(title: String, value: Int) -> some View {
+    private func inventoryRow(title: String, value: Int, help: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             Text(title)
             Text("\(value)")
                 .foregroundStyle(GameplayTheme.accentGold)
                 .font(.headline)
         }
+        .help(help)
     }
 
     private var collapsedSummary: some View {
         Text("Soil \(viewModel.economy.amount(of: .soil))  ·  Stone \(viewModel.economy.amount(of: .stone))  ·  Pipestone \(viewModel.economy.amount(of: .pipestone))  ·  Relics \(viewModel.economy.amount(of: .relic))")
             .font(.callout.weight(.medium))
             .foregroundStyle(Color.white.opacity(0.85))
+    }
+
+    private var hotbarRow: some View {
+        HStack(spacing: 10) {
+            ForEach([BlockType.soil, .rock, .tunnel], id: \.self) { block in
+                let count = viewModel.inventory[block, default: 0]
+                Button {
+                    viewModel.placeBlockType = block
+                    viewModel.interactionMode = .place
+                } label: {
+                    VStack(spacing: 4) {
+                        Text(block.hotbarEmoji)
+                            .font(.title2)
+                        Text("\(count)")
+                            .font(.caption2.weight(.bold))
+                    }
+                    .frame(width: 52, height: 52)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(viewModel.placeBlockType == block && viewModel.interactionMode == .place
+                                  ? GameplayTheme.accentGold.opacity(0.35)
+                                  : Color.white.opacity(0.08))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(viewModel.placeBlockType == block ? GameplayTheme.accentGold : Color.clear, lineWidth: 2)
+                    )
+                }
+                .buttonStyle(.plain)
+                .help("Place \(block.hotbarName) blocks (Minecraft)")
+            }
+        }
+    }
+
+    private var interactionHint: String {
+        switch viewModel.interactionMode {
+        case .rts:
+            return "AoE: Drag-select units · Click sand to move · Place Building for structures · WASD/Space for Anubis."
+        case .mine:
+            return "Minecraft: Click any column to break its surface block · Space still digs forward."
+        case .place:
+            return "Minecraft: Choose hotbar block · Click terrain to place (uses inventory)."
+        }
     }
 
     private var depthLabel: String {
@@ -450,6 +513,12 @@ extension ContentView {
 
     private func commitOptions() {
         optionsDraft.apply(to: settings)
+        viewModel.syncAudio(with: settings)
+        if viewState == .playing {
+            viewModel.rebuild(using: settings)
+            viewModel.prepareForPlay()
+            startLoadingCountdown()
+        }
         withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
             isOptionsVisible = false
         }
@@ -526,9 +595,12 @@ private struct MainMenuView: View {
                     Text("Cave of Nations")
                         .font(.system(size: 54, weight: .black))
                         .foregroundStyle(GameplayTheme.accentGold)
-                    Text("Awaken the clans beneath the dunes.")
+                    Text("Age of Empires × Minecraft underground.")
                         .font(.title3.weight(.medium))
                         .foregroundStyle(Color.white.opacity(0.78))
+                    Text("RTS villagers · voxel mine & place · clan bases")
+                        .font(.footnote)
+                        .foregroundStyle(Color.white.opacity(0.65))
                 }
                 .multilineTextAlignment(.center)
 
@@ -541,9 +613,9 @@ private struct MainMenuView: View {
                 }
 
                 VStack(spacing: 6) {
-                    Text("WASD / Arrow keys to move, Space to dig")
+                    Text("Command units like AoE · Mine and build blocks like Minecraft")
                         .font(.footnote)
-                    Text("Click to interact with the sands and uncover relics")
+                    Text("Recover relics to unite the fox nations below the dunes")
                         .font(.footnote)
                         .foregroundStyle(Color.white.opacity(0.75))
                 }
@@ -579,6 +651,22 @@ private struct GameOptionsPanel: View {
                 Stepper(value: $draft.height, in: 6...24) {
                     Text("Height: \(draft.height)")
                 }
+            }
+
+            VStack(alignment: .leading, spacing: 12) {
+                Text("World Seed")
+                    .font(.headline)
+                HStack(spacing: 12) {
+                    TextField("Seed", text: $draft.worldSeedText)
+                        .textFieldStyle(.roundedBorder)
+                    Button("Randomize") {
+                        draft.randomizeSeed()
+                    }
+                    .buttonStyle(SecondaryButtonStyle())
+                }
+                Text("Reuse or share this number to generate the same cavern layout.")
+                    .font(.caption)
+                    .foregroundStyle(Color.white.opacity(0.7))
             }
 
             VStack(alignment: .leading, spacing: 18) {
@@ -630,6 +718,7 @@ private struct SettingsDraft {
     var width: Int = 16
     var height: Int = 12
     var depth: Int = 16
+    var worldSeedText: String = ""
     var musicVolume: Double = 0.7
     var effectsVolume: Double = 0.8
     var resolution: GameSettings.Resolution = .hd1080
@@ -643,6 +732,7 @@ private struct SettingsDraft {
         self.width = settings.dimensions.width
         self.height = settings.dimensions.height
         self.depth = settings.dimensions.depth
+        self.worldSeedText = String(settings.worldGenerationSeed)
         self.musicVolume = settings.musicVolume
         self.effectsVolume = settings.effectsVolume
         self.resolution = settings.resolution
@@ -651,12 +741,19 @@ private struct SettingsDraft {
         self.loadingDuration = settings.loadingDuration
     }
 
+    mutating func randomizeSeed() {
+        worldSeedText = String(UInt32.random(in: 0...UInt32.max))
+    }
+
     func apply(to settings: GameSettings) {
         settings.dimensions = GameSettings.Dimensions(
             width: max(8, min(32, width)),
             height: max(6, min(24, height)),
             depth: max(8, min(32, depth))
         )
+        if let parsed = UInt32(worldSeedText.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            settings.worldGenerationSeed = parsed
+        }
         settings.musicVolume = min(max(musicVolume, 0), 1)
         settings.effectsVolume = min(max(effectsVolume, 0), 1)
         settings.resolution = resolution
@@ -664,6 +761,20 @@ private struct SettingsDraft {
         settings.showLoadingScreen = showLoadingScreen
         settings.loadingDuration = loadingDuration
     }
+}
+
+private enum ResourceHelp {
+    static let soil = "Loose earth for burrows and basic construction."
+    static let stone = "Structural rock for workshops and reinforcements."
+    static let pipestone = "Carvable stone that also fuels clan energy."
+    static let relic = "Sacred finds that advance nation unification."
+    static let food = "Sustains population upkeep each tick."
+    static let energy = "Powers productivity; drained when pipestone is scarce."
+    static let soilBlock = "Harvested soil cubes—cheap fill for tunnels and dens."
+    static let rockBlock = "Dense stone blocks for fortified chambers."
+    static let pipestoneBlock = "Red pipestone used in ceremonial builds."
+    static let relicBlock = "Recovered relic material from deep veins."
+    static let denBlock = "Organic den remnants that restore food stores."
 }
 
 private struct SceneViewWrapper: NSViewRepresentable {
@@ -866,7 +977,7 @@ private struct SceneViewWrapper: NSViewRepresentable {
                 if viewModel.placementState?.isValid == true {
                     viewModel.commitPlacement()
                 } else {
-                    NSSound.beep()
+                    viewModel.playInvalidPlacementFeedback()
                 }
                 selectionRect.wrappedValue = nil
                 return
@@ -934,14 +1045,23 @@ private struct SceneViewWrapper: NSViewRepresentable {
         }
 
         func handleMouseMoved(_ event: NSEvent, in view: GameSceneView) {
-            guard viewModel.isPlacingBuilding else { return }
             let location = view.convert(event.locationInWindow, from: nil)
-            updatePlacementHover(at: location, in: view)
+            if viewModel.isPlacingBuilding {
+                updatePlacementHover(at: location, in: view)
+                return
+            }
+            guard let point = worldPoint(at: location, in: view) else {
+                viewModel.updateMoveHover(with: nil)
+                return
+            }
+            viewModel.updateMoveHover(with: point)
         }
 
         func handleMouseExited(_ event: NSEvent, in view: GameSceneView) {
-            guard viewModel.isPlacingBuilding else { return }
-            viewModel.updatePlacementHover(with: nil)
+            if viewModel.isPlacingBuilding {
+                viewModel.updatePlacementHover(with: nil)
+            }
+            viewModel.updateMoveHover(with: nil)
         }
 
         private func updateSelectionRect(to point: CGPoint) {
@@ -962,12 +1082,34 @@ private struct SceneViewWrapper: NSViewRepresentable {
 
         private func handleClick(event: NSEvent, at location: CGPoint, in view: GameSceneView) {
             let additive = event.modifierFlags.contains(.shift) || event.modifierFlags.contains(.command)
+            let hitOptions: [SCNHitTestOption: Any] = [
+                .searchMode: SCNHitTestSearchMode.closest.rawValue,
+                .ignoreHiddenNodes: false
+            ]
+            guard let worldPoint = worldPoint(at: location, in: view) else { return }
+
+            switch viewModel.interactionMode {
+            case .mine:
+                viewModel.mineBlock(at: worldPoint)
+                return
+            case .place:
+                viewModel.placeBlock(at: worldPoint)
+                return
+            case .rts:
+                break
+            }
+
+            if let playerHit = view.hitTest(location, options: hitOptions).first(where: { viewModel.isPlayerNode($0.node) }) {
+                viewModel.selectGuardian(additive: additive)
+                _ = playerHit
+                return
+            }
             if let unit = nearestUnit(to: location, in: view) {
                 viewModel.select(unit: unit, additive: additive)
                 return
             }
 
-            guard !additive, let worldPoint = worldPoint(at: location, in: view) else { return }
+            guard !additive else { return }
             viewModel.movePlayer(to: worldPoint)
         }
 

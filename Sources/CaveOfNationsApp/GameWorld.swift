@@ -57,6 +57,9 @@ final class GameWorld {
     private var playerFacing: SIMD2<Int> = SIMD2(0, -1)
     private var playerSelected: Bool = false
     private var playerSelectionNode: SCNNode?
+    private var moveHoverNode: SCNNode?
+    private var generationSeed: Int32
+    private var blockRNG: GKMersenneTwisterRandomSource?
     private lazy var characterIdleAction: SCNAction = {
         let up = SCNAction.moveBy(x: 0, y: 0.25, z: 0, duration: 1.6)
         up.timingMode = .easeInEaseOut
@@ -80,6 +83,10 @@ final class GameWorld {
 
     var playerGridCoordinate: SIMD2<Int>? {
         playerGridPosition
+    }
+
+    var worldGenerationSeed: UInt32 {
+        UInt32(bitPattern: generationSeed)
     }
 
     /// Summary of a placement probe against the voxel grid.
@@ -130,8 +137,9 @@ final class GameWorld {
         updateCameraTransform(animated: animated)
     }
 
-    init(dimensions: Dimensions) {
+    init(dimensions: Dimensions, seed: Int32 = Int32.random(in: Int32.min...Int32.max)) {
         self.dimensions = dimensions
+        self.generationSeed = seed
         self.scene = SCNScene()
         self.blockNodes = Array(repeating: Array(repeating: Array(repeating: nil, count: dimensions.depth), count: dimensions.height), count: dimensions.width)
         self.blockTypes = Array(repeating: Array(repeating: Array(repeating: .air, count: dimensions.depth), count: dimensions.height), count: dimensions.width)
@@ -139,7 +147,11 @@ final class GameWorld {
         rebuild()
     }
 
-    func rebuild(with dimensions: Dimensions? = nil) {
+    func rebuild(with dimensions: Dimensions? = nil, seed: Int32? = nil) {
+        if let seed {
+            generationSeed = seed
+        }
+        blockRNG = GKMersenneTwisterRandomSource(seed: UInt64(bitPattern: Int64(generationSeed)))
         if let newDimensions = dimensions, newDimensions.width != self.dimensions.width || newDimensions.height != self.dimensions.height || newDimensions.depth != self.dimensions.depth {
             self.dimensions = newDimensions
             blockNodes = Array(repeating: Array(repeating: Array(repeating: nil, count: newDimensions.depth), count: newDimensions.height), count: newDimensions.width)
@@ -153,6 +165,7 @@ final class GameWorld {
         layoutBlocks()
         spawnPlayerCharacter()
         updatePlacementPreview(for: nil)
+        updateMoveHover(at: nil)
         resetCamera(animated: true)
     }
 
@@ -303,7 +316,9 @@ final class GameWorld {
     private func generateBlocks() {
         invalidateSurfaceDepthCache()
         relicCoordinateStore = []
-        let source = GKPerlinNoiseSource(frequency: 0.3, octaveCount: 4, persistence: 0.55, lacunarity: 2.2, seed: Int32.random(in: Int32.min...Int32.max))
+        let rng = blockRNG ?? GKMersenneTwisterRandomSource(seed: UInt64(bitPattern: Int64(generationSeed)))
+        blockRNG = rng
+        let source = GKPerlinNoiseSource(frequency: 0.3, octaveCount: 4, persistence: 0.55, lacunarity: 2.2, seed: generationSeed)
         let noise = GKNoise(source)
         let map = GKNoiseMap(noise, size: vector_double2(1.0, 1.0), origin: vector_double2(0, 0), sampleCount: vector_int2(Int32(dimensions.width), Int32(dimensions.depth)), seamless: true)
 
@@ -318,10 +333,10 @@ final class GameWorld {
                     } else if y == 0 {
                         blockType = .den
                     } else if y < columnHeight - 3 {
-                        blockType = Bool.random(probability: 0.12) ? .rock : .soil
-                    } else if Bool.random(probability: 0.06) {
+                        blockType = rng.nextBool(probability: 0.12) ? .rock : .soil
+                    } else if rng.nextBool(probability: 0.06) {
                         blockType = .relic
-                    } else if Bool.random(probability: 0.04) {
+                    } else if rng.nextBool(probability: 0.04) {
                         blockType = .pipestone
                     } else {
                         blockType = .soil
@@ -475,32 +490,67 @@ final class GameWorld {
         }
     }
 
+    /// Minecraft-style: break the surface block at a grid column.
+    @discardableResult
+    func mineBlock(at column: SIMD2<Int>) -> BlockType? {
+        guard column.x >= 0, column.x < dimensions.width,
+              column.y >= 0, column.y < dimensions.depth else { return nil }
+        guard let surface = surfaceLevel(atX: column.x, z: column.y) else { return nil }
+        return removeBlock(atX: column.x, y: surface, z: column.y)
+    }
+
+    /// Minecraft-style: place a block in the headroom above the surface column.
+    @discardableResult
+    func placeBlock(_ type: BlockType, at column: SIMD2<Int>) -> Bool {
+        guard type != .air, type != .relic, type != .den else { return false }
+        guard column.x >= 0, column.x < dimensions.width,
+              column.y >= 0, column.y < dimensions.depth else { return false }
+        guard let surface = surfaceLevel(atX: column.x, z: column.y) else { return false }
+        let headIndex = surface + 1
+        guard headIndex < dimensions.height, blockTypes[column.x][headIndex][column.y] == .air else {
+            return false
+        }
+
+        blockTypes[column.x][headIndex][column.y] = type
+        let node = makeBlockNode(for: type)
+        node.position = SCNVector3(
+            CGFloat(column.x) * tileSize,
+            CGFloat(headIndex) * tileSize,
+            CGFloat(column.y) * tileSize
+        )
+        terrainNode.addChildNode(node)
+        blockNodes[column.x][headIndex][column.y] = node
+        updateSurfaceDepthCache(at: column)
+        let worldPos = SCNVector3(node.position.x, node.position.y, node.position.z)
+        spawnDigParticles(at: worldPos, color: blockColor(for: type))
+        return true
+    }
+
     @discardableResult
     func digPlayerForward() -> BlockType? {
         guard let current = playerGridPosition else { return nil }
         let targetColumn = SIMD2(current.x + playerFacing.x, current.y + playerFacing.y)
-        guard targetColumn.x >= 0, targetColumn.x < dimensions.width,
-              targetColumn.y >= 0, targetColumn.y < dimensions.depth else { return nil }
+        return mineBlock(at: targetColumn)
+    }
 
-        guard let surface = surfaceLevel(atX: targetColumn.x, z: targetColumn.y) else {
-            return nil
-        }
-
-        let blockType = blockTypes[targetColumn.x][surface][targetColumn.y]
+    @discardableResult
+    private func removeBlock(atX x: Int, y: Int, z: Int) -> BlockType? {
+        let blockType = blockTypes[x][y][z]
         guard blockType != .air else { return nil }
 
-        if let node = blockNodes[targetColumn.x][surface][targetColumn.y] {
+        if let node = blockNodes[x][y][z] {
             node.removeFromParentNode()
-            blockNodes[targetColumn.x][surface][targetColumn.y] = nil
+            blockNodes[x][y][z] = nil
         }
 
-        blockTypes[targetColumn.x][surface][targetColumn.y] = .air
-        updateSurfaceDepthCache(at: targetColumn)
+        blockTypes[x][y][z] = .air
+        let column = SIMD2(x, z)
+        updateSurfaceDepthCache(at: column)
         if blockType == .relic {
-            relicCoordinateStore.removeAll { $0 == targetColumn }
+            relicCoordinateStore.removeAll { $0 == column }
         }
 
-        let digPosition = playerWorldPosition(x: targetColumn.x, surface: surface, z: targetColumn.y)
+        let digPosition = playerWorldPosition(x: x, surface: y, z: z)
         spawnDigParticles(at: digPosition, color: blockColor(for: blockType))
         animatePlayerDig()
 
@@ -831,6 +881,53 @@ final class GameWorld {
     func setPlayerSelected(_ selected: Bool) {
         playerSelected = selected
         playerSelectionNode?.isHidden = !selected
+        guard let ring = playerSelectionNode else { return }
+        ring.removeAction(forKey: "selection.pulse")
+        ring.scale = SCNVector3(1, 1, 1)
+        guard selected else { return }
+        let grow = SCNAction.scale(to: 1.12, duration: 0.45)
+        grow.timingMode = .easeInEaseOut
+        let shrink = SCNAction.scale(to: 1.0, duration: 0.45)
+        shrink.timingMode = .easeInEaseOut
+        ring.runAction(SCNAction.repeatForever(SCNAction.sequence([grow, shrink])), forKey: "selection.pulse")
+    }
+
+    /// Show a subtle ground ring where the guardian would path when clicked.
+    func updateMoveHover(at worldPoint: SCNVector3?) {
+        guard let worldPoint, let coordinate = gridCoordinate(for: worldPoint),
+              navigableSurface(atX: coordinate.x, z: coordinate.y) != nil else {
+            moveHoverNode?.removeFromParentNode()
+            moveHoverNode = nil
+            return
+        }
+
+        let surface = navigableSurface(atX: coordinate.x, z: coordinate.y) ?? 0
+        var hoverPosition = playerWorldPosition(x: coordinate.x, surface: surface, z: coordinate.y)
+        hoverPosition.y = CGFloat(surface) * tileSize + tileSize * 0.02
+
+        let node: SCNNode
+        if let existing = moveHoverNode {
+            node = existing
+        } else {
+            let ringGeometry = SCNTorus(ringRadius: tileSize * 0.42, pipeRadius: tileSize * 0.03)
+            let material = SCNMaterial()
+            material.diffuse.contents = NSColor.systemTeal.withAlphaComponent(0.45)
+            material.emission.contents = NSColor.systemTeal.withAlphaComponent(0.35)
+            material.lightingModel = .constant
+            ringGeometry.materials = [material]
+            let ringNode = SCNNode(geometry: ringGeometry)
+            ringNode.eulerAngles = SCNVector3(CGFloat.pi / 2, 0, 0)
+            ringNode.name = "move.hover"
+            ringNode.castsShadow = false
+            charactersNode.addChildNode(ringNode)
+            moveHoverNode = ringNode
+            node = ringNode
+        }
+
+        SCNTransaction.begin()
+        SCNTransaction.animationDuration = 0.1
+        node.position = hoverPosition
+        SCNTransaction.commit()
     }
 
     func setPaused(_ paused: Bool) {
@@ -999,9 +1096,9 @@ final class GameWorld {
     }
 }
 
-private extension Bool {
-    static func random(probability: Double) -> Bool {
-        Double.random(in: 0...1) < probability
+private extension GKMersenneTwisterRandomSource {
+    func nextBool(probability: Double) -> Bool {
+        Double(nextUniform()) < probability
     }
 }
 

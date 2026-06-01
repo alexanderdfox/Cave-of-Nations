@@ -15,6 +15,12 @@ struct CaveOfNationsApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView(settings: gameSettings)
+                .onAppear {
+                    GameAudio.shared.configure(
+                        musicVolume: gameSettings.musicVolume,
+                        effectsVolume: gameSettings.effectsVolume
+                    )
+                }
         }
         .commands {
             CommandMenu("Game") {

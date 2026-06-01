@@ -49,4 +49,28 @@ enum BlockType: CaseIterable {
             return true
         }
     }
+
+    var hotbarEmoji: String {
+        switch self {
+        case .soil: return "🟫"
+        case .rock: return "🪨"
+        case .tunnel: return "⬜"
+        case .pipestone: return "🟥"
+        case .relic: return "✨"
+        case .den: return "🟧"
+        case .air: return "·"
+        }
+    }
+
+    var hotbarName: String {
+        switch self {
+        case .soil: return "soil"
+        case .rock: return "rock"
+        case .tunnel: return "tunnel"
+        case .pipestone: return "pipestone"
+        case .relic: return "relic"
+        case .den: return "den"
+        case .air: return "air"
+        }
+    }
 }

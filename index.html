@@ -1,0 +1,956 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cave of Nations — AoE × Minecraft</title>
+  <style>
+    :root {
+      --bg-dark: #12171c;
+      --bg-warm: #382818;
+      --gold: #dbad4a;
+      --teal: #2e6369;
+      --panel: rgba(0, 0, 0, 0.38);
+      --border: rgba(255, 255, 255, 0.18);
+      --text: rgba(255, 255, 255, 0.88);
+      --dim: rgba(255, 255, 255, 0.62);
+      --font: Georgia, "Iowan Old Style", serif;
+      --ui: system-ui, -apple-system, sans-serif;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { width: 100%; height: 100%; overflow: hidden; font-family: var(--ui); color: var(--text); background: #0d1014; }
+    #app { position: relative; width: 100%; height: 100%; }
+    canvas#world { display: block; width: 100%; height: 100%; }
+    canvas#world.mode-select { cursor: default; }
+    canvas#world.mode-mine { cursor: cell; }
+    canvas#world.mode-place { cursor: copy; }
+    canvas#world.mode-build { cursor: crosshair; }
+
+    .glass {
+      background: var(--panel);
+      backdrop-filter: blur(14px);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      box-shadow: 0 12px 36px rgba(0,0,0,0.4);
+    }
+
+    /* AoE-style resource bar */
+    #resource-bar {
+      position: absolute; top: 0; left: 0; right: 0; z-index: 11;
+      display: none; padding: 0.5rem 1rem;
+      background: linear-gradient(180deg, rgba(0,0,0,0.75), transparent);
+      pointer-events: none;
+    }
+    #resource-bar.active { display: flex; gap: 1.25rem; flex-wrap: wrap; align-items: center; }
+    .res-pill {
+      display: flex; align-items: center; gap: 0.4rem;
+      font-size: 0.82rem; font-weight: 700;
+      padding: 0.35rem 0.7rem; border-radius: 8px;
+      background: rgba(0,0,0,0.45); border: 1px solid var(--border);
+    }
+    .res-pill .icon { font-size: 1rem; }
+    .res-pill.pop { border-color: var(--gold); color: var(--gold); }
+
+    #menu {
+      position: absolute; inset: 0; z-index: 30;
+      display: flex; align-items: center; justify-content: center;
+      background: linear-gradient(135deg, rgba(18,23,28,0.95), rgba(56,40,24,0.95));
+    }
+    #menu .card { text-align: center; padding: 2.5rem 3rem; max-width: 560px; }
+    #menu h1 { font-family: var(--font); font-size: 2.6rem; color: var(--gold); margin-bottom: 0.5rem; }
+    #menu .sub { color: var(--dim); margin-bottom: 0.25rem; font-size: 0.9rem; letter-spacing: 0.08em; text-transform: uppercase; }
+    #menu p { line-height: 1.55; margin-bottom: 1.5rem; }
+    .pill-row { display: flex; gap: 0.5rem; justify-content: center; flex-wrap: wrap; margin-bottom: 1.25rem; }
+    .pill { font-size: 0.72rem; padding: 0.3rem 0.65rem; border-radius: 99px; background: rgba(255,255,255,0.08); border: 1px solid var(--border); }
+
+    button {
+      font: 600 0.9rem var(--ui); border: none; border-radius: 12px;
+      padding: 0.65rem 1.2rem; cursor: pointer; transition: transform 0.1s;
+    }
+    button:active { transform: scale(0.97); }
+    .btn-gold { color: #fff; background: linear-gradient(135deg, var(--gold), var(--teal)); }
+    .btn-outline { color: var(--gold); background: rgba(255,255,255,0.06); border: 1.5px solid var(--gold); }
+    .btn-sm { font-size: 0.75rem; padding: 0.4rem 0.7rem; }
+
+    #hud { position: absolute; inset: 0; pointer-events: none; z-index: 10; display: none; }
+    #hud.active { display: block; }
+    #hud > * { pointer-events: auto; }
+
+    .side-panel {
+      position: absolute; top: 3.5rem; right: 1rem;
+      width: 200px; padding: 1rem;
+    }
+    .side-panel h3 { color: var(--gold); font-size: 0.85rem; margin-bottom: 0.5rem; }
+    #minimap { width: 100%; aspect-ratio: 1; border-radius: 10px; border: 1px solid var(--border); image-rendering: pixelated; }
+
+    /* Minecraft hotbar */
+    #hotbar {
+      position: absolute; bottom: 7.5rem; left: 50%; transform: translateX(-50%);
+      display: flex; gap: 4px; padding: 6px;
+      pointer-events: auto;
+    }
+    .slot {
+      width: 48px; height: 48px; border-radius: 8px;
+      border: 2px solid rgba(255,255,255,0.2);
+      background: rgba(0,0,0,0.5);
+      cursor: pointer; position: relative;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.4rem;
+    }
+    .slot.active { border-color: var(--gold); box-shadow: 0 0 12px var(--gold); }
+    .slot .count { position: absolute; bottom: 2px; right: 4px; font-size: 0.65rem; font-weight: 800; }
+
+    /* AoE command panel */
+    #command-panel {
+      position: absolute; bottom: 1rem; left: 1rem; right: 1rem;
+      padding: 0.85rem 1rem; pointer-events: auto;
+    }
+    .mode-tabs { display: flex; gap: 0.35rem; margin-bottom: 0.65rem; flex-wrap: wrap; }
+    .mode-tab {
+      padding: 0.4rem 0.75rem; border-radius: 8px; font-size: 0.75rem; font-weight: 700;
+      background: rgba(255,255,255,0.06); border: 1px solid transparent; color: var(--dim);
+      cursor: pointer;
+    }
+    .mode-tab.active { border-color: var(--gold); color: var(--gold); background: rgba(219,173,74,0.12); }
+    .cmd-row { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+    .hint { font-size: 0.7rem; color: var(--dim); margin-top: 0.5rem; line-height: 1.45; }
+
+    #selection-box {
+      position: absolute; border: 1.5px solid var(--gold);
+      background: rgba(219,173,74,0.12); pointer-events: none; display: none; z-index: 9;
+    }
+
+    #pause-overlay, #options-overlay {
+      position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+      background: rgba(0,0,0,0.6); z-index: 25; pointer-events: auto;
+    }
+    #pause-overlay.visible, #options-overlay.visible { display: flex; }
+    #options-overlay .card { padding: 1.75rem; width: min(400px, 92vw); }
+    #options-overlay input[type="text"] { width: 100%; padding: 0.5rem; margin-top: 0.25rem; border-radius: 8px; border: 1px solid var(--border); background: rgba(0,0,0,0.35); color: #fff; }
+
+    .toast {
+      position: absolute; bottom: 42%; left: 50%; transform: translateX(-50%);
+      padding: 0.55rem 1rem; border-radius: 10px; background: rgba(0,0,0,0.8);
+      color: var(--gold); font-size: 0.82rem; opacity: 0; transition: opacity 0.25s;
+      pointer-events: none; z-index: 14; max-width: 90%; text-align: center;
+    }
+    .toast.show { opacity: 1; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <canvas id="world"></canvas>
+    <div id="selection-box"></div>
+
+    <div id="resource-bar"></div>
+
+    <section id="menu">
+      <div class="card glass">
+        <p class="sub">Age of Empires × Minecraft</p>
+        <h1>Cave of Nations</h1>
+        <p>Command fox-clan villagers like an RTS. Mine and place voxels like a sandbox. Burrow bases, gather relics, expand your nation underground.</p>
+        <div class="pill-row">
+          <span class="pill">RTS selection &amp; orders</span>
+          <span class="pill">Voxel mine &amp; place</span>
+          <span class="pill">Base building</span>
+          <span class="pill">Procedural caverns</span>
+        </div>
+        <div style="display:flex;gap:0.75rem;justify-content:center;flex-wrap:wrap">
+          <button class="btn-gold" id="btn-start">Start Game</button>
+          <button class="btn-outline" id="btn-options-menu">Options</button>
+        </div>
+      </div>
+    </section>
+
+    <div id="hud">
+      <div class="side-panel glass">
+        <h3>Minimap</h3>
+        <canvas id="minimap" width="64" height="64"></canvas>
+        <h3 style="margin-top:0.75rem">Clan</h3>
+        <p id="clan-info" style="font-size:0.78rem;color:var(--dim);line-height:1.4"></p>
+      </div>
+
+      <div id="hotbar" class="glass"></div>
+
+      <div id="command-panel" class="glass">
+        <div class="mode-tabs" id="mode-tabs"></div>
+        <div class="cmd-row" id="cmd-row"></div>
+        <p class="hint" id="control-hint"></p>
+      </div>
+    </div>
+
+    <div id="pause-overlay"><div class="glass" style="padding:2rem;text-align:center"><h2 style="color:var(--gold);margin-bottom:1rem">Paused</h2><button class="btn-gold" id="btn-resume">Resume</button></div></div>
+    <div id="options-overlay">
+      <div class="card glass">
+        <h2 style="color:var(--gold);margin-bottom:1rem">Options</h2>
+        <label style="font-size:0.85rem;color:var(--dim)">World seed</label>
+        <input type="text" id="opt-seed" />
+        <button class="btn-outline btn-sm" id="btn-random-seed" style="margin-top:0.5rem">Randomize</button>
+        <div style="margin-top:1.25rem;display:flex;gap:0.5rem;justify-content:flex-end">
+          <button class="btn-outline" id="btn-options-cancel">Cancel</button>
+          <button class="btn-gold" id="btn-options-done">Done</button>
+        </div>
+      </div>
+    </div>
+    <div class="toast" id="toast"></div>
+  </div>
+
+  <script>
+    const BLOCK = { AIR: 0, SOIL: 1, ROCK: 2, RELIC: 3, PIPE: 4, DEN: 5, TUNNEL: 6 };
+    const BLOCK_META = {
+      [BLOCK.SOIL]:   { name: 'Soil',   color: '#84542e', icon: '🟫', placeable: true },
+      [BLOCK.ROCK]:   { name: 'Rock',   color: '#5a5a5a', icon: '⬛', placeable: true },
+      [BLOCK.RELIC]:  { name: 'Relic',  color: '#edc84f', icon: '✨', placeable: false },
+      [BLOCK.PIPE]:   { name: 'Pipe',   color: '#b82e35', icon: '🟥', placeable: false },
+      [BLOCK.DEN]:    { name: 'Den',    color: '#e0b280', icon: '🟧', placeable: false },
+      [BLOCK.TUNNEL]: { name: 'Tunnel', color: '#2a2a2a', icon: '⬜', placeable: true },
+    };
+    const BUILDINGS = {
+      burrow:    { name: 'Burrow',    cost: { soil: 12, stone: 4 }, pop: 4, color: '#8b6914', size: 2 },
+      workshop:  { name: 'Workshop',  cost: { stone: 10, pipestone: 6 }, pop: 2, color: '#4a6a8c', size: 2 },
+    };
+    const MODES = ['select', 'mine', 'place', 'build'];
+    const MODE_LABELS = { select: 'RTS Select', mine: 'Mine (Minecraft)', place: 'Place Blocks', build: 'Build (AoE)' };
+    const W = 24, H = 12, D = 24, TILE = 26;
+
+    function mulberry32(seed) {
+      return function () {
+        let t = (seed += 0x6d2b79f5);
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+    function hashSeed(s) {
+      let h = 2166136261;
+      for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+      return h >>> 0;
+    }
+
+    const state = {
+      seed: (Date.now() >>> 0),
+      grid: [], surface: [], relics: [],
+      buildings: [],
+      units: [],
+      selectedUnits: new Set(),
+      mode: 'select',
+      hotbarSlot: 0,
+      hotbar: [BLOCK.SOIL, BLOCK.ROCK, BLOCK.TUNNEL, BLOCK.SOIL, BLOCK.ROCK],
+      buildType: 'burrow',
+      inventory: { soil: 8, rock: 4, pipestone: 0, relic: 0, tunnel: 2 },
+      economy: { soil: 100, stone: 80, pipestone: 20, relic: 0, food: 120, wood: 0 },
+      pop: 3, popCap: 5,
+      hover: null, targetBlock: null,
+      particles: [],
+      paused: true, started: false,
+      drag: null,
+      tick: 0,
+    };
+
+    const canvas = document.getElementById('world');
+    const ctx = canvas.getContext('2d');
+    const mctx = document.getElementById('minimap').getContext('2d');
+    const selBox = document.getElementById('selection-box');
+    let cam = { x: 0, y: 0, scale: 1 };
+
+    // ─── World ───────────────────────────────────────────────────
+    function generateWorld() {
+      const rng = mulberry32(state.seed);
+      state.grid = Array.from({ length: W }, () => Array.from({ length: H }, () => Array(D).fill(BLOCK.AIR)));
+      state.relics = [];
+      state.buildings = [];
+      for (let x = 0; x < W; x++) for (let z = 0; z < D; z++) {
+        const n = (Math.sin(x * 0.4 + state.seed * 0.001) + Math.sin(z * 0.35)) * 0.25 + rng() * 0.5;
+        const colH = Math.max(3, Math.floor(H * (0.42 + 0.38 * n)));
+        for (let y = 0; y < H; y++) {
+          if (y >= colH) state.grid[x][y][z] = BLOCK.AIR;
+          else if (y === 0) state.grid[x][y][z] = BLOCK.DEN;
+          else if (y < colH - 3) state.grid[x][y][z] = rng() < 0.14 ? BLOCK.ROCK : BLOCK.SOIL;
+          else if (rng() < 0.055) { state.grid[x][y][z] = BLOCK.RELIC; state.relics.push([x, z, y]); }
+          else if (rng() < 0.04) state.grid[x][y][z] = BLOCK.PIPE;
+          else state.grid[x][y][z] = BLOCK.SOIL;
+        }
+      }
+      recomputeSurface();
+      const s = findSpawn();
+      state.units = [
+        { id: 1, role: 'miner', x: s.x, z: s.z, path: [], job: null, color: '#c9a227' },
+        { id: 2, role: 'builder', x: s.x + 1, z: s.z, path: [], job: null, color: '#6a9fb5' },
+        { id: 3, role: 'scout', x: s.x, z: s.z + 1, path: [], job: null, color: '#8fbc6a' },
+      ];
+      state.selectedUnits = new Set([1]);
+      state.pop = state.units.length;
+      resize();
+    }
+
+    function recomputeSurface() {
+      state.surface = Array.from({ length: W }, () => Array(D).fill(-1));
+      for (let x = 0; x < W; x++) for (let z = 0; z < D; z++)
+        for (let y = H - 1; y >= 0; y--)
+          if (state.grid[x][y][z] !== BLOCK.AIR) { state.surface[x][z] = y; break; }
+    }
+
+    function navigable(x, z) {
+      if (x < 0 || x >= W || z < 0 || z >= D) return false;
+      const s = state.surface[x][z];
+      if (s < 0) return false;
+      const head = s + 1;
+      return head < H && state.grid[x][head][z] === BLOCK.AIR;
+    }
+
+    function findSpawn() {
+      const cx = (W/2)|0, cz = (D/2)|0;
+      let best = { x: cx, z: cz }, d0 = Infinity;
+      for (let x = 0; x < W; x++) for (let z = 0; z < D; z++) {
+        if (!navigable(x, z)) continue;
+        const d = (x-cx)**2 + (z-cz)**2;
+        if (d < d0) { d0 = d; best = { x, z }; }
+      }
+      return best;
+    }
+
+    function pickColumn(sx, sy) {
+      const g = screenToGrid(sx, sy);
+      if (g.x < 0 || g.x >= W || g.z < 0 || g.z >= D) return null;
+      const s = state.surface[g.x][g.z];
+      let y = s;
+      if (state.mode === 'mine' && state.targetBlock) y = state.targetBlock.y;
+      return { x: g.x, z: g.z, y: y >= 0 ? y : 0, surface: s };
+    }
+
+    function pickTargetBlock(sx, sy) {
+      const g = screenToGrid(sx, sy);
+      if (g.x < 0 || g.x >= W || g.z < 0 || g.z >= D) return null;
+      const s = state.surface[g.x][g.z];
+      if (s < 0) return null;
+      for (let y = s; y >= 0; y--) {
+        if (state.grid[g.x][y][g.z] !== BLOCK.AIR)
+          return { x: g.x, y, z: g.z, type: state.grid[g.x][y][g.z] };
+      }
+      return null;
+    }
+
+    // ─── A* ──────────────────────────────────────────────────────
+    function findPath(from, to) {
+      const key = (x,z) => `${x},${z}`;
+      const open = new Set([key(from.x, from.z)]);
+      const came = {}, g = { [key(from.x,from.z)]: 0 };
+      const f = { [key(from.x,from.z)]: Math.abs(from.x-to.x)+Math.abs(from.z-to.z) };
+      while (open.size) {
+        let ck = null, bs = Infinity;
+        for (const k of open) if ((f[k]??1e9) < bs) { bs = f[k]; ck = k; }
+        const [cx, cz] = ck.split(',').map(Number);
+        if (cx === to.x && cz === to.z) {
+          const path = [{x:cx,z:cz}];
+          let k = ck;
+          while (came[k]) { k = came[k]; const [px,pz]=k.split(',').map(Number); path.push({x:px,z:pz}); }
+          return path.reverse();
+        }
+        open.delete(ck);
+        for (const [dx,dz] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+          const nx=cx+dx, nz=cz+dz;
+          if (!navigable(nx,nz)) continue;
+          const nk = key(nx,nz), tg = (g[ck]??1e9)+1;
+          if (tg < (g[nk]??1e9)) { came[nk]=ck; g[nk]=tg; f[nk]=tg+Math.abs(nx-to.x)+Math.abs(nz-to.z); open.add(nk); }
+        }
+      }
+      return null;
+    }
+
+    function orderUnitsMove(tx, tz) {
+      const targets = [...state.selectedUnits].map((id, i) => {
+        const u = state.units.find(x => x.id === id);
+        if (!u) return null;
+        const off = [{x:0,z:0},{x:1,z:0},{x:-1,z:0},{x:0,z:1}][i % 4];
+        const gx = Math.max(0, Math.min(W-1, tx + off.x));
+        const gz = Math.max(0, Math.min(D-1, tz + off.z));
+        return { u, path: findPath({x:u.x,z:u.z}, {x:gx,z:gz}) };
+      }).filter(Boolean);
+      for (const t of targets) {
+        if (t.path && t.path.length > 1) {
+          t.u.path = t.path.slice(1);
+          t.u.job = { type: 'move' };
+        }
+      }
+      toast('Units moving.');
+    }
+
+    function orderUnitsMine(x, z) {
+      for (const id of state.selectedUnits) {
+        const u = state.units.find(x => x.id === id);
+        if (!u) continue;
+        u.path = findPath({x:u.x,z:u.z}, {x,z}) || [];
+        u.job = { type: 'mine', x, z };
+      }
+      toast('Miners ordered to dig.');
+    }
+
+    // ─── Minecraft: mine & place ─────────────────────────────────
+    function mineBlock(x, y, z) {
+      const type = state.grid[x][y][z];
+      if (type === BLOCK.AIR || type === BLOCK.DEN) return false;
+      state.grid[x][y][z] = BLOCK.AIR;
+      recomputeSurface();
+      if (type === BLOCK.RELIC) {
+        state.relics = state.relics.filter(r => !(r[0]===x && r[2]===z && r[1]===y));
+        state.economy.relic++; state.inventory.relic = (state.inventory.relic||0)+1;
+        toast('Relic recovered!');
+      }
+      if (type === BLOCK.SOIL) { state.economy.soil += 2; state.inventory.soil++; }
+      if (type === BLOCK.ROCK) { state.economy.stone += 2; state.inventory.rock++; }
+      if (type === BLOCK.PIPE) { state.economy.pipestone += 2; state.inventory.pipestone = (state.inventory.pipestone||0)+1; }
+      if (type === BLOCK.TUNNEL) state.inventory.tunnel = (state.inventory.tunnel||0)+1;
+      spawnParticles(x, z, BLOCK_META[type]?.color || '#888');
+      return true;
+    }
+
+    function placeBlock(x, z, blockType) {
+      const invKey = { [BLOCK.SOIL]:'soil', [BLOCK.ROCK]:'rock', [BLOCK.TUNNEL]:'tunnel' }[blockType];
+      if (!invKey || (state.inventory[invKey]||0) < 1) { toast('Not enough blocks in inventory.'); return false; }
+      const s = state.surface[x][z];
+      if (s < 0) return false;
+      const y = s + 1;
+      if (y >= H || state.grid[x][y][z] !== BLOCK.AIR) { toast('No space to place block.'); return false; }
+      state.grid[x][y][z] = blockType;
+      state.inventory[invKey]--;
+      recomputeSurface();
+      spawnParticles(x, z, BLOCK_META[blockType].color);
+      toast(`Placed ${BLOCK_META[blockType].name}.`);
+      return true;
+    }
+
+    function craftTunnel() {
+      if (state.inventory.soil >= 2 && state.inventory.rock >= 1) {
+        state.inventory.soil -= 2; state.inventory.rock -= 1;
+        state.inventory.tunnel = (state.inventory.tunnel||0) + 4;
+        toast('Crafted 4 tunnel blocks (2 soil + 1 rock).');
+        return true;
+      }
+      toast('Need 2 soil + 1 rock to craft tunnels.');
+      return false;
+    }
+
+    // ─── AoE: buildings & train ──────────────────────────────────
+    function canAfford(cost) {
+      return Object.entries(cost).every(([k,v]) => (state.economy[k]||0) >= v);
+    }
+    function pay(cost) {
+      for (const [k,v] of Object.entries(cost)) state.economy[k] -= v;
+    }
+
+    function placeBuilding(x, z, type) {
+      const b = BUILDINGS[type];
+      if (!b) return false;
+      if (!canAfford(b.cost)) { toast(`Cannot afford ${b.name}.`); return false; }
+      for (let dx = 0; dx < b.size; dx++) for (let dz = 0; dz < b.size; dz++) {
+        if (!navigable(x+dx, z+dz)) { toast('Invalid build site.'); return false; }
+      }
+      pay(b.cost);
+      state.buildings.push({ type, x, z, size: b.size });
+      state.popCap += b.pop;
+      toast(`${b.name} constructed! Pop cap +${b.pop}.`);
+      return true;
+    }
+
+    function trainVillager() {
+      const cost = { food: 50, soil: 10 };
+      if (state.pop >= state.popCap) { toast('Population cap reached. Build burrows.'); return; }
+      if (!canAfford(cost)) { toast('Need 50 food, 10 soil to train.'); return; }
+      pay(cost);
+      const s = findSpawn();
+      const id = Math.max(0, ...state.units.map(u => u.id)) + 1;
+      state.units.push({ id, role: 'miner', x: s.x, z: s.z, path: [], job: null, color: '#d4a84b' });
+      state.pop++;
+      state.selectedUnits = new Set([id]);
+      toast('Villager trained!');
+    }
+
+    function spawnParticles(x, z, color) {
+      for (let i = 0; i < 10; i++)
+        state.particles.push({ x: x+0.5, z: z+0.5, vx: (Math.random()-0.5)*0.1, vy: Math.random()*0.06, life: 1, color });
+    }
+
+    // ─── Simulation tick ─────────────────────────────────────────
+    function gameTick() {
+      if (state.paused || !state.started) return;
+      state.tick++;
+      if (state.tick % 30 === 0) {
+        state.economy.food = Math.max(0, state.economy.food - state.pop);
+        if (state.economy.food <= 0) toast('Clan is starving!');
+      }
+      for (const u of state.units) {
+        if (u.path?.length) {
+          const n = u.path[0];
+          u.x = n.x; u.z = n.z;
+          u.path.shift();
+        } else if (u.job?.type === 'mine') {
+          const s = state.surface[u.job.x]?.[u.job.z];
+          if (s >= 0 && Math.abs(u.x - u.job.x) <= 1 && Math.abs(u.z - u.job.z) <= 1) {
+            mineBlock(u.job.x, s, u.job.z);
+            state.economy.soil += 1;
+          }
+          u.job = null;
+        }
+      }
+    }
+
+    // ─── Render ──────────────────────────────────────────────────
+    function isoCoords(wx, wz) {
+      return {
+        x: (wx - wz) * (TILE * 0.5),
+        y: (wx + wz) * (TILE * 0.25),
+      };
+    }
+
+    /** Bounding box of the voxel field in pre-camera isometric space. */
+    function playfieldMetrics() {
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+      for (let x = 0; x < W; x++) {
+        for (let z = 0; z < D; z++) {
+          const iso = isoCoords(x, z);
+          const surface = state.surface[x]?.[z] ?? 0;
+          const top = iso.y - (Math.max(0, surface) + 1) * 4.5;
+          const foot = iso.y + TILE * 0.45;
+          minX = Math.min(minX, iso.x - TILE * 0.5);
+          maxX = Math.max(maxX, iso.x + TILE * 0.5);
+          minY = Math.min(minY, top);
+          maxY = Math.max(maxY, foot);
+        }
+      }
+      return {
+        minX, maxX, minY, maxY,
+        width: maxX - minX,
+        height: maxY - minY,
+        centerX: (minX + maxX) / 2,
+        centerY: (minY + maxY) / 2,
+      };
+    }
+
+    function resize() {
+      const dpr = Math.min(devicePixelRatio || 1, 2);
+      canvas.width = canvas.clientWidth * dpr;
+      canvas.height = canvas.clientHeight * dpr;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      const m = playfieldMetrics();
+      const pad = { top: 88, bottom: 200, left: 48, right: 220 };
+      const availW = canvas.clientWidth - pad.left - pad.right;
+      const availH = canvas.clientHeight - pad.top - pad.bottom;
+      cam.scale = Math.min(availW / m.width, availH / m.height) * 0.92;
+
+      const viewCX = pad.left + availW / 2;
+      const viewCY = pad.top + availH / 2;
+      cam.x = viewCX - m.centerX * cam.scale;
+      cam.y = viewCY - m.centerY * cam.scale;
+    }
+
+    function worldToScreen(wx, wz) {
+      const iso = isoCoords(wx, wz);
+      return { x: cam.x + iso.x * cam.scale, y: cam.y + iso.y * cam.scale };
+    }
+
+    function screenToGrid(sx, sy) {
+      const lx = (sx - cam.x) / cam.scale, ly = (sy - cam.y) / cam.scale;
+      const wx = (lx / (TILE * 0.5) + ly / (TILE * 0.25)) / 2;
+      const wz = (ly / (TILE * 0.25) - lx / (TILE * 0.5)) / 2;
+      return { x: Math.round(wx), z: Math.round(wz) };
+    }
+
+    function shade(hex, f) {
+      const n = parseInt(hex.slice(1), 16);
+      let r=(n>>16)&255,g=(n>>8)&255,b=n&255;
+      return `rgb(${Math.min(255,r*f|0)},${Math.min(255,g*f|0)},${Math.min(255,b*f|0)})`;
+    }
+
+    function drawBlock(x, y, z) {
+      const type = state.grid[x][y][z];
+      if (type === BLOCK.AIR) return;
+      const base = worldToScreen(x, z);
+      const h = (y + 1) * 4.5 * cam.scale;
+      const w = TILE * cam.scale * 0.9;
+      const color = BLOCK_META[type]?.color || '#666';
+      ctx.fillStyle = shade(color, 0.72);
+      ctx.beginPath();
+      ctx.moveTo(base.x, base.y - h);
+      ctx.lineTo(base.x + w*0.5, base.y - h + w*0.2);
+      ctx.lineTo(base.x + w*0.5, base.y + w*0.2);
+      ctx.lineTo(base.x, base.y);
+      ctx.closePath(); ctx.fill();
+      ctx.fillStyle = shade(color, 0.52);
+      ctx.beginPath();
+      ctx.moveTo(base.x, base.y);
+      ctx.lineTo(base.x + w*0.5, base.y + w*0.2);
+      ctx.lineTo(base.x, base.y + w*0.4);
+      ctx.lineTo(base.x - w*0.5, base.y + w*0.2);
+      ctx.closePath(); ctx.fill();
+      ctx.fillStyle = shade(color, 1.15);
+      ctx.beginPath();
+      ctx.moveTo(base.x, base.y - h);
+      ctx.lineTo(base.x + w*0.5, base.y - h + w*0.2);
+      ctx.lineTo(base.x, base.y - h + w*0.4);
+      ctx.lineTo(base.x - w*0.5, base.y - h + w*0.2);
+      ctx.closePath(); ctx.fill();
+      if (type === BLOCK.RELIC) {
+        ctx.fillStyle = 'rgba(255,220,80,0.6)';
+        ctx.beginPath();
+        ctx.arc(base.x, base.y - h - 3, 3 * cam.scale, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    function drawBuilding(b) {
+      const meta = BUILDINGS[b.type];
+      const p = worldToScreen(b.x + b.size/2 - 0.5, b.z + b.size/2 - 0.5);
+      ctx.fillStyle = meta.color;
+      ctx.strokeStyle = 'rgba(255,220,120,0.8)';
+      ctx.lineWidth = 2;
+      const r = 14 * cam.scale * b.size * 0.5;
+      ctx.beginPath();
+      ctx.rect(p.x - r, p.y - r*1.8, r*2, r*1.6);
+      ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#fff';
+      ctx.font = `${10*cam.scale}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.fillText(meta.name[0], p.x, p.y - r*0.5);
+    }
+
+    function drawUnit(u) {
+      const p = worldToScreen(u.x, u.z);
+      const lift = (state.surface[u.x][u.z] + 2) * 4.5 * cam.scale;
+      const sel = state.selectedUnits.has(u.id);
+      if (sel) {
+        ctx.strokeStyle = 'rgba(255,210,60,0.9)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.ellipse(p.x, p.y - lift + 8, 11*cam.scale, 4*cam.scale, 0, 0, Math.PI*2);
+        ctx.stroke();
+      }
+      ctx.fillStyle = u.color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y - lift, 7*cam.scale, 0, Math.PI*2);
+      ctx.fill();
+      ctx.fillStyle = '#1a1510';
+      ctx.font = `bold ${8*cam.scale}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.fillText(u.role[0].toUpperCase(), p.x, p.y - lift + 3);
+    }
+
+    function render() {
+      const grd = ctx.createLinearGradient(0,0,canvas.clientWidth,canvas.clientHeight);
+      grd.addColorStop(0,'#12171c'); grd.addColorStop(1,'#382818');
+      ctx.fillStyle = grd;
+      ctx.fillRect(0,0,canvas.clientWidth,canvas.clientHeight);
+      const mid = worldToScreen((W - 1) / 2, (D - 1) / 2);
+      const sandTop = mid.y + 12;
+      ctx.fillStyle = '#7a5a34';
+      ctx.fillRect(0, sandTop, canvas.clientWidth, canvas.clientHeight - sandTop);
+      ctx.strokeStyle = 'rgba(180,130,70,0.2)';
+      for (let i = 0; i < 6; i++) {
+        const y = sandTop + 20 + i * 22;
+        ctx.beginPath();
+        ctx.ellipse(mid.x, y, 90 + i * 14, 10, 0, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      const order = [];
+      for (let x=0;x<W;x++) for (let z=0;z<D;z++) for (let y=0;y<H;y++)
+        if (state.grid[x][y][z] !== BLOCK.AIR) order.push({x,y,z,k:x+z+y*0.01});
+      order.sort((a,b)=>a.k-b.k);
+      for (const b of order) drawBlock(b.x,b.y,b.z);
+
+      for (const b of state.buildings) drawBuilding(b);
+      for (const u of state.units) drawUnit(u);
+
+      if (state.hover && state.mode === 'place') {
+        const h = worldToScreen(state.hover.x, state.hover.z);
+        ctx.strokeStyle = 'rgba(100,200,120,0.8)';
+        ctx.strokeRect(h.x-10, h.y-6, 20, 12);
+      }
+      if (state.targetBlock && state.mode === 'mine') {
+        const tb = state.targetBlock;
+        const p = worldToScreen(tb.x, tb.z);
+        const hh = (tb.y+1)*4.5*cam.scale;
+        ctx.strokeStyle = 'rgba(255,80,80,0.9)';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(p.x-12, p.y-hh-4, 24, 8);
+      }
+
+      state.particles = state.particles.filter(p => {
+        p.x+=p.vx; p.z+=p.vx; p.vy-=0.003; p.life-=0.05;
+        if (p.life<=0) return false;
+        const s = worldToScreen(p.x,p.z);
+        ctx.globalAlpha = p.life;
+        ctx.fillStyle = p.color;
+        ctx.beginPath(); ctx.arc(s.x,s.y-16,2,0,Math.PI*2); ctx.fill();
+        ctx.globalAlpha = 1;
+        return true;
+      });
+    }
+
+    function drawMinimap() {
+      mctx.fillStyle = '#1a1510';
+      mctx.fillRect(0,0,64,64);
+      const maxD = Math.max(...state.surface.flat().filter(v=>v>=0),1);
+      for (let x=0;x<W;x++) for (let z=0;z<D;z++) {
+        const d = state.surface[x][z];
+        if (d<0) continue;
+        const t = d/maxD;
+        mctx.fillStyle = `rgb(${70+t*60|0},${50+t*40|0},${35+t*25|0})`;
+        mctx.fillRect(x/W*64, z/D*64, 3, 3);
+      }
+      for (const [rx,,rz] of state.relics) {
+        mctx.fillStyle = '#edc84f';
+        mctx.fillRect(rx/W*64, rz/D*64, 2, 2);
+      }
+      for (const b of state.buildings) {
+        mctx.fillStyle = BUILDINGS[b.type].color;
+        mctx.fillRect(b.x/W*64, b.z/D*64, 4, 4);
+      }
+      for (const u of state.units) {
+        mctx.fillStyle = state.selectedUnits.has(u.id) ? '#fff' : u.color;
+        mctx.fillRect(u.x/W*64, u.z/D*64, 2, 2);
+      }
+    }
+
+    // ─── HUD ─────────────────────────────────────────────────────
+    function updateHUD() {
+      const bar = document.getElementById('resource-bar');
+      bar.className = 'active';
+      bar.innerHTML = [
+        ['🌾', 'food', state.economy.food],
+        ['🟫', 'soil', state.economy.soil],
+        ['🪨', 'stone', state.economy.stone],
+        ['🟥', 'pipe', state.economy.pipestone],
+        ['✨', 'relic', state.economy.relic],
+      ].map(([ic, k, v]) => `<div class="res-pill"><span class="icon">${ic}</span>${v}</div>`).join('')
+        + `<div class="res-pill pop">👥 ${state.pop}/${state.popCap}</div>`;
+
+      document.getElementById('clan-info').innerHTML =
+        `${state.units.length} units · ${state.buildings.length} structures<br>Seed ${state.seed}`;
+
+      const hb = document.getElementById('hotbar');
+      hb.innerHTML = state.hotbar.map((bt, i) => {
+        const m = BLOCK_META[bt];
+        const key = { [BLOCK.SOIL]:'soil', [BLOCK.ROCK]:'rock', [BLOCK.TUNNEL]:'tunnel' }[bt];
+        const cnt = key ? (state.inventory[key]||0) : '∞';
+        return `<div class="slot ${i===state.hotbarSlot?'active':''}" data-slot="${i}" title="${m?.name||''}">${m?.icon||'?'}<span class="count">${cnt}</span></div>`;
+      }).join('') + `<div class="slot" id="slot-craft" title="Craft tunnel (2 soil + 1 rock)">🔨</div>`;
+
+      hb.querySelectorAll('.slot[data-slot]').forEach(el => {
+        el.onclick = () => { state.hotbarSlot = +el.dataset.slot; setMode('place'); updateHUD(); };
+      });
+      document.getElementById('slot-craft')?.addEventListener('click', craftTunnel);
+
+      document.getElementById('mode-tabs').innerHTML = MODES.map(m =>
+        `<button class="mode-tab ${state.mode===m?'active':''}" data-mode="${m}">${MODE_LABELS[m]}</button>`
+      ).join('');
+      document.querySelectorAll('.mode-tab').forEach(el => {
+        el.onclick = () => setMode(el.dataset.mode);
+      });
+
+      const cmds = {
+        select: [
+          ['Train Villager (50🌾 10🟫)', () => trainVillager()],
+          ['Pause', () => togglePause()],
+        ],
+        mine: [['Craft Tunnel', () => craftTunnel()]],
+        place: [],
+        build: [
+          ['Burrow (12🟫 4🪨)', () => { state.buildType='burrow'; toast('Click valid ground for Burrow.'); }],
+          ['Workshop (10🪨 6🟥)', () => { state.buildType='workshop'; toast('Click valid ground for Workshop.'); }],
+        ],
+      };
+      document.getElementById('cmd-row').innerHTML = (cmds[state.mode]||[]).map(([l,fn],i) =>
+        `<button class="btn-outline btn-sm" data-ci="${i}">${l}</button>`
+      ).join('') + `<button class="btn-outline btn-sm" id="btn-menu">Menu</button>`;
+      (cmds[state.mode]||[]).forEach(([_, fn], i) => {
+        document.querySelector(`[data-ci="${i}"]`)?.addEventListener('click', fn);
+      });
+      document.getElementById('btn-menu')?.addEventListener('click', backToMenu);
+
+      const hints = {
+        select: 'Drag to select villagers · Click ground to move · Shift+click adds to selection · Right-click = mine order',
+        mine: 'Click any block face to break it (Minecraft) · Drops go to inventory',
+        place: 'Select hotbar slot · Click air above ground to place · Costs inventory blocks',
+        build: 'Choose structure · Click flat terrain to found an AoE-style building',
+      };
+      document.getElementById('control-hint').textContent = hints[state.mode] || '';
+      canvas.className = `mode-${state.mode}`;
+      drawMinimap();
+    }
+
+    function setMode(m) {
+      state.mode = m;
+      updateHUD();
+    }
+
+    function toast(msg) {
+      const el = document.getElementById('toast');
+      el.textContent = msg;
+      el.classList.add('show');
+      clearTimeout(toast._t);
+      toast._t = setTimeout(() => el.classList.remove('show'), 2400);
+    }
+
+    // ─── Input ───────────────────────────────────────────────────
+    function canvasCoords(e) {
+      const r = canvas.getBoundingClientRect();
+      return { x: e.clientX - r.left, y: e.clientY - r.top };
+    }
+
+    canvas.addEventListener('mousedown', e => {
+      if (!state.started || state.paused) return;
+      const c = canvasCoords(e);
+      if (state.mode === 'select' && e.button === 0) {
+        state.drag = { x0: c.x, y0: c.y, x1: c.x, y1: c.y };
+      }
+    });
+
+    canvas.addEventListener('mousemove', e => {
+      if (!state.started || state.paused) return;
+      const c = canvasCoords(e);
+      const g = screenToGrid(c.x, c.y);
+      state.hover = g;
+      state.targetBlock = pickTargetBlock(c.x, c.y);
+      if (state.drag) {
+        state.drag.x1 = c.x; state.drag.y1 = c.y;
+        const d = state.drag;
+        const left = Math.min(d.x0, d.x1), top = Math.min(d.y0, d.y1);
+        const w = Math.abs(d.x1 - d.x0), h = Math.abs(d.y1 - d.y0);
+        const cr = canvas.getBoundingClientRect();
+        selBox.style.display = 'block';
+        selBox.style.left = (cr.left + left) + 'px';
+        selBox.style.top = (cr.top + top) + 'px';
+        selBox.style.width = w + 'px';
+        selBox.style.height = h + 'px';
+      }
+    });
+
+    canvas.addEventListener('mouseup', e => {
+      if (!state.started || state.paused) return;
+      const c = canvasCoords(e);
+      const g = screenToGrid(c.x, c.y);
+      selBox.style.display = 'none';
+
+      if (state.drag && state.mode === 'select') {
+        const d = state.drag;
+        state.drag = null;
+        const rect = {
+          left: Math.min(d.x0, d.x1), top: Math.min(d.y0, d.y1),
+          right: Math.max(d.x0, d.x1), bottom: Math.max(d.y0, d.y1),
+        };
+        if (Math.hypot(d.x1-d.x0, d.y1-d.y0) > 8) {
+          const additive = e.shiftKey;
+          if (!additive) state.selectedUnits.clear();
+          for (const u of state.units) {
+            const p = worldToScreen(u.x, u.z);
+            if (p.x >= rect.left && p.x <= rect.right && p.y >= rect.top && p.y <= rect.bottom)
+              state.selectedUnits.add(u.id);
+          }
+          updateHUD();
+          return;
+        }
+      }
+      state.drag = null;
+
+      if (e.button === 2) {
+        e.preventDefault();
+        if (state.mode === 'select' && navigable(g.x, g.z)) orderUnitsMine(g.x, g.z);
+        return;
+      }
+
+      if (state.mode === 'select') {
+        const hit = state.units.find(u => {
+          const p = worldToScreen(u.x, u.z);
+          return Math.hypot(p.x - c.x, p.y - c.y) < 18;
+        });
+        if (hit) {
+          if (!e.shiftKey) state.selectedUnits = new Set([hit.id]);
+          else state.selectedUnits.add(hit.id);
+        } else if (navigable(g.x, g.z)) {
+          orderUnitsMove(g.x, g.z);
+        }
+      } else if (state.mode === 'mine') {
+        const tb = pickTargetBlock(c.x, c.y);
+        if (tb) mineBlock(tb.x, tb.y, tb.z);
+      } else if (state.mode === 'place') {
+        const bt = state.hotbar[state.hotbarSlot];
+        if (bt) placeBlock(g.x, g.z, bt);
+      } else if (state.mode === 'build') {
+        placeBuilding(g.x, g.z, state.buildType);
+      }
+      updateHUD();
+    });
+
+    canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+    window.addEventListener('keydown', e => {
+      if (!state.started) return;
+      if (e.code === 'Escape') togglePause();
+      const num = +e.key;
+      if (num >= 1 && num <= 5) { state.hotbarSlot = num - 1; setMode('place'); }
+      if (e.code === 'KeyQ') setMode(MODES[(MODES.indexOf(state.mode)+MODES.length-1)%MODES.length]);
+      if (e.code === 'KeyE') setMode(MODES[(MODES.indexOf(state.mode)+1)%MODES.length]);
+    });
+
+    // ─── Flow ────────────────────────────────────────────────────
+    function startGame() {
+      document.getElementById('menu').style.display = 'none';
+      document.getElementById('hud').classList.add('active');
+      state.started = true;
+      state.paused = false;
+      generateWorld();
+      setMode('select');
+      updateHUD();
+      toast('AoE commands + Minecraft mining united. Drag-select villagers, press E to cycle modes.');
+    }
+
+    function togglePause() {
+      state.paused = !state.paused;
+      document.getElementById('pause-overlay').classList.toggle('visible', state.paused);
+    }
+
+    function backToMenu() {
+      state.started = false;
+      state.paused = true;
+      document.getElementById('hud').classList.remove('active');
+      document.getElementById('resource-bar').className = '';
+      document.getElementById('pause-overlay').classList.remove('visible');
+      document.getElementById('menu').style.display = 'flex';
+    }
+
+    function openOptions(fromMenu) {
+      document.getElementById('opt-seed').value = state.seed;
+      document.getElementById('options-overlay').classList.add('visible');
+      document.getElementById('options-overlay').dataset.fromMenu = fromMenu ? '1' : '0';
+    }
+    function closeOptions(apply) {
+      document.getElementById('options-overlay').classList.remove('visible');
+      if (apply) {
+        const s = document.getElementById('opt-seed').value.trim();
+        state.seed = s ? (parseInt(s,10)>>>0) || hashSeed(s) : state.seed;
+        if (state.started) { generateWorld(); updateHUD(); toast('World regenerated.'); }
+      }
+    }
+
+    document.getElementById('btn-start').onclick = startGame;
+    document.getElementById('btn-options-menu').onclick = () => openOptions(true);
+    document.getElementById('btn-resume').onclick = togglePause;
+    document.getElementById('btn-options-cancel').onclick = () => closeOptions(false);
+    document.getElementById('btn-options-done').onclick = () => closeOptions(true);
+    document.getElementById('btn-random-seed').onclick = () => {
+      document.getElementById('opt-seed').value = ((Math.random()*0xffffffff)>>>0).toString();
+    };
+
+    window.addEventListener('resize', resize);
+    let last = 0;
+    function loop(t) {
+      if (t - last > 50) { gameTick(); last = t; }
+      if (state.started && !state.paused) render();
+      requestAnimationFrame(loop);
+    }
+    generateWorld();
+    loop(0);
+  </script>
+</body>
+</html>

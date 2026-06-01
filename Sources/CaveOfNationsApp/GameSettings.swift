@@ -51,6 +51,8 @@ final class GameSettings: ObservableObject {
     @Published var isFullscreen: Bool
     @Published var showLoadingScreen: Bool
     @Published var loadingDuration: TimeInterval
+    /// Procedural terrain seed; reuse to revisit or share layouts.
+    @Published var worldGenerationSeed: UInt32
 
     let resetPublisher = PassthroughSubject<Void, Never>()
 
@@ -60,7 +62,8 @@ final class GameSettings: ObservableObject {
          resolution: Resolution = .hd1080,
          isFullscreen: Bool = false,
          showLoadingScreen: Bool = true,
-         loadingDuration: TimeInterval = 2.5) {
+         loadingDuration: TimeInterval = 2.5,
+         worldGenerationSeed: UInt32 = UInt32.random(in: 0...UInt32.max)) {
         self.dimensions = Dimensions(
             width: max(8, dimensions.width),
             height: max(6, dimensions.height),
@@ -72,6 +75,11 @@ final class GameSettings: ObservableObject {
         self.isFullscreen = isFullscreen
         self.showLoadingScreen = showLoadingScreen
         self.loadingDuration = loadingDuration
+        self.worldGenerationSeed = worldGenerationSeed
+    }
+
+    func randomizeWorldSeed() {
+        worldGenerationSeed = UInt32.random(in: 0...UInt32.max)
     }
 
     func requestReset() {

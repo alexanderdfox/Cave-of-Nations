@@ -16,6 +16,23 @@ import simd
 
 @MainActor
 final class GameViewModel: ObservableObject {
+    /// Blends Age of Empires command modes with Minecraft voxel editing.
+    enum InteractionMode: String, CaseIterable, Identifiable {
+        case rts
+        case mine
+        case place
+
+        var id: String { rawValue }
+
+        var label: String {
+            switch self {
+            case .rts: return "RTS"
+            case .mine: return "Mine"
+            case .place: return "Place"
+            }
+        }
+    }
+
     enum MoveDirection {
         case forward
         case backward
@@ -43,8 +60,13 @@ final class GameViewModel: ObservableObject {
     @Published private(set) var isLoading: Bool
     /// Live state for ghost building placement, if any.
     @Published private(set) var placementState: PlacementState?
+    @Published private(set) var isGuardianSelected: Bool = false
+    @Published private(set) var worldSeed: UInt32 = 0
+    @Published var interactionMode: InteractionMode = .rts
+    @Published var placeBlockType: BlockType = .soil
 
     private var cancellables: Set<AnyCancellable> = []
+    private let settings: GameSettings
     private let tickInterval: TimeInterval = 0.5
     private var timer: AnyCancellable?
     /// Hard-coded sample templates until a tech tree or content pipeline exists.
@@ -66,12 +88,15 @@ final class GameViewModel: ObservableObject {
     ]
 
     init(settings: GameSettings) {
+        self.settings = settings
         let dimensions = GameWorld.Dimensions(
             width: settings.dimensions.width,
             height: settings.dimensions.height,
             depth: settings.dimensions.depth
         )
-        self.world = GameWorld(dimensions: dimensions)
+        let seed = Int32(bitPattern: settings.worldGenerationSeed)
+        self.world = GameWorld(dimensions: dimensions, seed: seed)
+        self.worldSeed = settings.worldGenerationSeed
         self.economy = EconomyState()
         self.isPaused = true
         self.isLoading = true
@@ -85,6 +110,10 @@ final class GameViewModel: ObservableObject {
         bootstrapClan()
         recalculateCounts()
         setupTimer()
+        GameAudio.shared.configure(
+            musicVolume: settings.musicVolume,
+            effectsVolume: settings.effectsVolume
+        )
     }
 
     var scene: SCNScene { world.scene }
@@ -98,9 +127,13 @@ final class GameViewModel: ObservableObject {
             height: settings.dimensions.height,
             depth: settings.dimensions.depth
         )
-        world.rebuild(with: dimensions)
+        let seed = Int32(bitPattern: settings.worldGenerationSeed)
+        world.rebuild(with: dimensions, seed: seed)
         world.setPaused(isPaused)
         playerCoordinate = world.playerGridCoordinate
+        worldSeed = world.worldGenerationSeed
+        isGuardianSelected = false
+        world.setPlayerSelected(false)
         isLoading = true
         recalculateCounts()
         economy.resetForNewWorld()
@@ -123,7 +156,9 @@ final class GameViewModel: ObservableObject {
             selectedUnitIDs.insert(unit.id)
         } else {
             selectedUnitIDs = [unit.id]
+            setGuardianSelected(false)
         }
+        GameAudio.shared.play(.select)
     }
 
     /// Bulk select units by ID and optionally merge with the current selection.
@@ -132,12 +167,53 @@ final class GameViewModel: ObservableObject {
             selectedUnitIDs.formUnion(ids)
         } else {
             selectedUnitIDs = ids
+            if !ids.isEmpty {
+                setGuardianSelected(false)
+            }
         }
+        if !ids.isEmpty {
+            GameAudio.shared.play(.select)
+        }
+    }
+
+    func isPlayerNode(_ node: SCNNode) -> Bool {
+        world.isPlayerSelected(node)
     }
 
     /// Reset the unit selection to an empty set.
     func clearSelection() {
         selectedUnitIDs = []
+        setGuardianSelected(false)
+    }
+
+    func selectGuardian(additive: Bool) {
+        if additive {
+            setGuardianSelected(true)
+        } else {
+            selectedUnitIDs = []
+            setGuardianSelected(true)
+        }
+        GameAudio.shared.play(.select)
+    }
+
+    private func setGuardianSelected(_ selected: Bool) {
+        isGuardianSelected = selected
+        world.setPlayerSelected(selected)
+    }
+
+    func updateMoveHover(with worldPoint: SCNVector3?) {
+        guard !isPaused, placementState == nil, interactionMode == .rts else {
+            world.updateMoveHover(at: nil)
+            return
+        }
+        world.updateMoveHover(at: worldPoint)
+    }
+
+    func syncAudio(with settings: GameSettings) {
+        GameAudio.shared.configure(
+            musicVolume: settings.musicVolume,
+            effectsVolume: settings.effectsVolume
+        )
     }
 
     func issue(command: Unit.Command) {
@@ -163,33 +239,103 @@ final class GameViewModel: ObservableObject {
     func movePlayer(to worldPoint: SCNVector3) {
         guard !isPaused else { return }
         world.movePlayer(to: worldPoint)
+        GameAudio.shared.play(.move)
     }
 
     func playerDig() {
         guard !isPaused else { return }
-        if let harvested = world.digPlayerForward() {
-            switch harvested {
-            case .soil:
-                economy.add(3, of: .soil)
-                addToInventory(block: .soil)
-            case .rock:
-                economy.add(2, of: .stone)
-                addToInventory(block: .rock)
-            case .pipestone:
-                economy.add(2, of: .pipestone)
-                economy.add(1, of: .energy)
-                addToInventory(block: .pipestone)
-            case .relic:
-                economy.add(1, of: .relic)
-                addToInventory(block: .relic)
-            case .den:
-                economy.add(2, of: .food)
-                addToInventory(block: .den)
-            case .tunnel, .air:
-                break
-            }
-            recalculateCounts()
+        applyHarvest(world.digPlayerForward())
+    }
+
+    func playInvalidPlacementFeedback() {
+        GameAudio.shared.play(.invalid)
+    }
+
+    /// Minecraft: break the surface block at a world column.
+    func mineBlock(at worldPoint: SCNVector3) {
+        guard !isPaused, interactionMode == .mine,
+              let coordinate = world.gridCoordinate(for: worldPoint) else { return }
+        applyHarvest(world.mineBlock(at: coordinate))
+    }
+
+    /// Minecraft: spend inventory to place a block above terrain.
+    func placeBlock(at worldPoint: SCNVector3) {
+        guard !isPaused, interactionMode == .place,
+              let coordinate = world.gridCoordinate(for: worldPoint) else { return }
+        let available = inventory[placeBlockType, default: 0]
+        guard available > 0 else {
+            playInvalidPlacementFeedback()
+            return
         }
+        guard world.placeBlock(placeBlockType, at: coordinate) else {
+            playInvalidPlacementFeedback()
+            return
+        }
+        inventory[placeBlockType, default: 0] -= 1
+        recalculateCounts()
+        GameAudio.shared.play(.dig)
+    }
+
+    /// Age of Empires: train a villager when food and housing allow.
+    func trainVillager() {
+        let foodCost = 50
+        let soilCost = 10
+        guard economy.population < economy.populationCap else {
+            playInvalidPlacementFeedback()
+            return
+        }
+        guard economy.consume(foodCost, of: .food), economy.consume(soilCost, of: .soil) else {
+            playInvalidPlacementFeedback()
+            return
+        }
+        let spawn = world.playerWorldPosition ?? world.focusPoint
+        units.append(Unit(role: .miner, position: spawn))
+        economy.adjustPopulation(by: 1)
+        GameAudio.shared.play(.select)
+    }
+
+    /// Craft tunnel blocks from soil and stone (Minecraft-style recipe).
+    func craftTunnelBlocks() {
+        let soilCost = 2
+        let stoneCost = 1
+        guard inventory[.soil, default: 0] >= soilCost,
+              inventory[.rock, default: 0] >= stoneCost else {
+            playInvalidPlacementFeedback()
+            return
+        }
+        inventory[.soil, default: 0] -= soilCost
+        inventory[.rock, default: 0] -= stoneCost
+        inventory[.tunnel, default: 0] += 4
+    }
+
+    var populationLabel: String {
+        "\(economy.population)/\(economy.populationCap)"
+    }
+
+    private func applyHarvest(_ harvested: BlockType?) {
+        guard let harvested else { return }
+        switch harvested {
+        case .soil:
+            economy.add(3, of: .soil)
+            addToInventory(block: .soil)
+        case .rock:
+            economy.add(2, of: .stone)
+            addToInventory(block: .rock)
+        case .pipestone:
+            economy.add(2, of: .pipestone)
+            economy.add(1, of: .energy)
+            addToInventory(block: .pipestone)
+        case .relic:
+            economy.add(1, of: .relic)
+            addToInventory(block: .relic)
+        case .den:
+            economy.add(2, of: .food)
+            addToInventory(block: .den)
+        case .tunnel, .air:
+            break
+        }
+        recalculateCounts()
+        GameAudio.shared.play(.dig)
     }
 
     private func bootstrapClan() {
